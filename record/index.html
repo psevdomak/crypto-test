@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>CryptoPro request tes</title>
+
+        <script src="https://cryptopro.ru/sites/default/files/products/cades/cadesplugin_api.js"></script>
+    </head>
+    <body>
+        <div style="margin-bottom: 20px">
+            <input id="container-name" type="text" placeholder="Имя контейнера" />
+        </div>
+
+        <div style="margin-bottom: 20px">
+            <textarea id="textarea" rows="10" cols="100" placeholder="Сюда его"></textarea>
+        </div>
+
+        <button id="generate-btn">Сгенерировать</button>
+
+        <div id="error" style="color: red; margin-top: 20px"></div>
+        <div id="success" style="color: green; margin-top: 20px"></div>
+
+        <script>
+            const button = document.querySelector('#generate-btn');
+            const errorDiv = document.querySelector('#error');
+            const successDiv = document.querySelector('#success');
+
+            button.addEventListener('click', () => {
+                errorDiv.innerHTML = '';
+                successDiv.innerHTML = '';
+
+                createCertificateRequest();
+            });
+
+            function createCertificateRequest() {
+                cadesplugin.async_spawn(function* () {
+                    try {
+                        const containerName = document.getElementById('container-name').value;
+                        const distinguishedName = document.getElementById('textarea').value;
+                        console.log(containerName);
+
+                        const OAbout = yield cadesplugin.CreateObjectAsync('CAdESCOM.About');
+                        const CSPName = yield OAbout.CSPName(80);
+                        const PKey = yield cadesplugin.CreateObjectAsync('X509Enrollment.CX509PrivateKey');
+
+                        yield PKey.propset_ProviderName(CSPName);
+                        yield PKey.propset_ContainerName(containerName);
+                        yield PKey.propset_ProviderType(80);
+                        yield PKey.propset_ExportPolicy(0);
+                        yield PKey.propset_KeySpec(1);
+
+                        const CertificateRequestPkcs10 = yield cadesplugin.CreateObjectAsync(
+                            'X509Enrollment.CX509CertificateRequestPkcs10',
+                        );
+
+                        yield CertificateRequestPkcs10.InitializeFromPrivateKey(1, PKey, '');
+
+                        const DistinguishedName = yield cadesplugin.CreateObjectAsync(
+                            'X509Enrollment.CX500DistinguishedName',
+                        );
+
+                        yield DistinguishedName.Encode(distinguishedName);
+                        yield CertificateRequestPkcs10.propset_Subject(DistinguishedName);
+
+                        const KeyUsageExtension = yield cadesplugin.CreateObjectAsync(
+                            'X509Enrollment.CX509ExtensionKeyUsage',
+                        );
+
+                        yield KeyUsageExtension.InitializeEncode(32 | 16 | 128 | 64 | 8);
+
+                        const IdentificationKindExtension = yield cadesplugin.CreateObjectAsync(
+                            'X509Enrollment.CX509ExtensionIdentificationKind',
+                        );
+
+                        IdentificationKindExtension.InitializeEncode(0);
+
+                        const Extensions = yield CertificateRequestPkcs10.X509Extensions;
+
+                        yield Extensions.Add(KeyUsageExtension);
+                        yield Extensions.Add(IdentificationKindExtension);
+
+                        const Enroll = yield cadesplugin.CreateObjectAsync('X509Enrollment.CX509Enrollment');
+
+                        yield Enroll.InitializeFromRequest(CertificateRequestPkcs10);
+
+                        yield Enroll.CreateRequest(1);
+
+                        successDiv.innerHTML = 'Запрос создан успешно';
+                    } catch (error) {
+                        console.log(error);
+                        errorDiv.innerHTML = error.message;
+                    }
+                });
+            }
+        </script>
+    </body>
+</html>
