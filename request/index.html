@@ -2,104 +2,90 @@
 <html lang="en">
     <head>
         <meta charset="UTF-8" />
-        <title>CryptoPro record test</title>
+        <title>CryptoPro request test</title>
 
         <script src="https://cryptopro.ru/sites/default/files/products/cades/cadesplugin_api.js"></script>
     </head>
     <body>
         <div style="margin-bottom: 20px">
+            <input id="container-name" type="text" placeholder="Имя контейнера" />
+        </div>
+
+        <div style="margin-bottom: 20px">
             <textarea id="textarea" rows="10" cols="100" placeholder="Сюда его"></textarea>
         </div>
 
-        <div style="margin: 1rem 0">
-            <input id="AllowNoOutstandingRequest" type="checkbox" name="AllowNoOutstandingRequest" />
-            <label for="AllowNoOutstandingRequest">AllowNoOutstandingRequest</label>
-        </div>
-
-        <div style="margin: 1rem 0">
-            <input id="AllowUntrustedCertificate" type="checkbox" name="AllowUntrustedCertificate" />
-            <label for="AllowUntrustedCertificate">AllowUntrustedCertificate</label>
-        </div>
-
-        <div style="margin: 1rem 0">
-            <input id="AllowUntrustedRoot" type="checkbox" name="AllowUntrustedRoot" />
-            <label for="AllowUntrustedRoot">AllowUntrustedRoot</label>
-        </div>
-
-        <div style="margin: 1rem 0">
-            <input id="SkipInstallToStore" type="checkbox" name="SkipInstallToStore" />
-            <label for="SkipInstallToStore">SkipInstallToStore</label>
-        </div>
-
-        <div style="margin: 1rem 0">
-            <input id="InstallCertChainToContainer" type="checkbox" name="InstallCertChainToContainer" />
-            <label for="InstallCertChainToContainer">InstallCertChainToContainer</label>
-        </div>
-
-        <div style="margin: 1rem 0">
-            <input id="UseContainerStore" type="checkbox" name="UseContainerStore" />
-            <label for="UseContainerStore">UseContainerStore</label>
-        </div>
-
-        <button id="record-btn">Записать</button>
+        <button id="generate-btn">Сгенерировать</button>
 
         <div id="error" style="color: red; margin-top: 20px"></div>
         <div id="success" style="color: green; margin-top: 20px"></div>
 
         <script>
-            const textarea = document.querySelector('#textarea');
-            const button = document.querySelector('#record-btn');
+            const button = document.querySelector('#generate-btn');
             const errorDiv = document.querySelector('#error');
             const successDiv = document.querySelector('#success');
 
-            let AllowNoOutstandingRequest = 0;
-            let AllowUntrustedCertificate = 0;
-            let AllowUntrustedRoot = 0;
-            let SkipInstallToStore = 0;
-            let InstallCertChainToContainer = 0;
-            let UseContainerStore = 0;
-
             button.addEventListener('click', () => {
-                AllowNoOutstandingRequest = document.querySelector('#AllowNoOutstandingRequest').checked ? 1 : 0;
-                AllowUntrustedCertificate = document.querySelector('#AllowUntrustedCertificate').checked ? 2 : 0;
-                AllowUntrustedRoot = document.querySelector('#AllowUntrustedRoot').checked ? 4 : 0;
-                SkipInstallToStore = document.querySelector('#SkipInstallToStore').checked ? 268435456 : 0;
-                InstallCertChainToContainer = document.querySelector('#InstallCertChainToContainer').checked
-                    ? 536870912
-                    : 0;
-                UseContainerStore = document.querySelector('#UseContainerStore').checked ? 1073741824 : 0;
-
                 errorDiv.innerHTML = '';
                 successDiv.innerHTML = '';
 
-                console.log('AllowNoOutstandingRequest', AllowNoOutstandingRequest);
-                console.log('AllowUntrustedCertificate', AllowUntrustedCertificate);
-                console.log('AllowUntrustedRoot', AllowUntrustedRoot);
-                console.log('SkipInstallToStore', SkipInstallToStore);
-                console.log('InstallCertChainToContainer', InstallCertChainToContainer);
-                console.log('UseContainerStore', UseContainerStore);
-
-                record();
+                createCertificateRequest();
             });
 
-            function record() {
-                const certificate = textarea.value.replace(/\\n/g, '');
-                const restrictionFlag =
-                    AllowNoOutstandingRequest |
-                    AllowUntrustedCertificate |
-                    AllowUntrustedRoot |
-                    SkipInstallToStore |
-                    InstallCertChainToContainer |
-                    UseContainerStore;
-
+            function createCertificateRequest() {
                 cadesplugin.async_spawn(function* () {
                     try {
-                        const Enrollment = yield cadesplugin.CreateObjectAsync('X509Enrollment.CX509Enrollment');
+                        const containerName = document.getElementById('container-name').value;
+                        const distinguishedName = document.getElementById('textarea').value;
+                        console.log(containerName);
 
-                        yield Enrollment.Initialize(0x1);
-                        yield Enrollment.InstallResponse(restrictionFlag, certificate, 1, '');
+                        const OAbout = yield cadesplugin.CreateObjectAsync('CAdESCOM.About');
+                        const CSPName = yield OAbout.CSPName(80);
+                        const PKey = yield cadesplugin.CreateObjectAsync('X509Enrollment.CX509PrivateKey');
 
-                        successDiv.innerHTML = 'Подпись записана успешно';
+                        yield PKey.propset_ProviderName(CSPName);
+                        yield PKey.propset_ContainerName(containerName);
+                        yield PKey.propset_ProviderType(80);
+                        yield PKey.propset_ExportPolicy(0);
+                        yield PKey.propset_KeySpec(1);
+
+                        const CertificateRequestPkcs10 = yield cadesplugin.CreateObjectAsync(
+                            'X509Enrollment.CX509CertificateRequestPkcs10',
+                        );
+
+                        yield CertificateRequestPkcs10.InitializeFromPrivateKey(1, PKey, '');
+
+                        const DistinguishedName = yield cadesplugin.CreateObjectAsync(
+                            'X509Enrollment.CX500DistinguishedName',
+                        );
+
+                        yield DistinguishedName.Encode(distinguishedName);
+                        yield CertificateRequestPkcs10.propset_Subject(DistinguishedName);
+
+                        const KeyUsageExtension = yield cadesplugin.CreateObjectAsync(
+                            'X509Enrollment.CX509ExtensionKeyUsage',
+                        );
+
+                        yield KeyUsageExtension.InitializeEncode(32 | 16 | 128 | 64 | 8);
+
+                        const IdentificationKindExtension = yield cadesplugin.CreateObjectAsync(
+                            'X509Enrollment.CX509ExtensionIdentificationKind',
+                        );
+
+                        IdentificationKindExtension.InitializeEncode(0);
+
+                        const Extensions = yield CertificateRequestPkcs10.X509Extensions;
+
+                        yield Extensions.Add(KeyUsageExtension);
+                        yield Extensions.Add(IdentificationKindExtension);
+
+                        const Enroll = yield cadesplugin.CreateObjectAsync('X509Enrollment.CX509Enrollment');
+
+                        yield Enroll.InitializeFromRequest(CertificateRequestPkcs10);
+
+                        yield Enroll.CreateRequest(1);
+
+                        successDiv.innerHTML = 'Запрос создан успешно';
                     } catch (error) {
                         console.log(error);
                         errorDiv.innerHTML = error.message;
