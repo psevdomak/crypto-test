@@ -34,7 +34,7 @@
                         const licenseNumber = document.getElementById('license-number').value;
                         const oLicense = yield cadesplugin.CreateObjectAsync("CAdESCOM.CPLicense");
 
-                        yield oLicense.SetLicense(containerName);
+                        yield oLicense.SetLicense(licenseNumber);
 
                         successDiv.innerHTML = 'Лицензия установлена';
                         console.log(error);
