@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>CryptoPro license test</title>
+
+        <script src="https://cryptopro.ru/sites/default/files/products/cades/cadesplugin_api.js"></script>
+    </head>
+    <body>
+        <div style="margin-bottom: 20px">
+            <input id="license-number" type="text" placeholder="Номер лицензии" />
+        </div>
+
+        <button id="install-btn">Установить</button>
+
+        <div id="error" style="color: red; margin-top: 20px"></div>
+        <div id="success" style="color: green; margin-top: 20px"></div>
+
+        <script>
+            const button = document.querySelector('#install-btn');
+            const errorDiv = document.querySelector('#error');
+            const successDiv = document.querySelector('#success');
+
+            button.addEventListener('click', () => {
+                errorDiv.innerHTML = '';
+                successDiv.innerHTML = '';
+
+                installLicense();
+            });
+
+            function installLicense() {
+                cadesplugin.async_spawn(function* () {
+                    try {
+                        const licenseNumber = document.getElementById('license-number').value;
+                        const oLicense = yield cadesplugin.CreateObjectAsync("CAdESCOM.CPLicense");
+
+                        yield oLicense.SetLicense(containerName);
+
+                        successDiv.innerHTML = 'Лицензия установлена';
+                        console.log(error);
+                        errorDiv.innerHTML = error.message;
+                    }
+                });
+            }
+        </script>
+    </body>
+</html>
