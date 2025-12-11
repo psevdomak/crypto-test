@@ -39,6 +39,9 @@
                         successDiv.innerHTML = 'Лицензия установлена';
                         console.log(error);
                         errorDiv.innerHTML = error.message;
+                    } catch (error) {
+                        console.log(error);
+                        errorDiv.innerHTML = error.message;
                     }
                 });
             }
