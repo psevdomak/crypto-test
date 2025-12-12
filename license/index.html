@@ -12,20 +12,33 @@
         </div>
 
         <button id="install-btn">Установить</button>
+        <button id="show-license-btn" style="margin-left: 10px;">Показать лицензию</button>
+
+        <div id="license-info"></div>
 
         <div id="error" style="color: red; margin-top: 20px"></div>
         <div id="success" style="color: green; margin-top: 20px"></div>
 
         <script>
             const button = document.querySelector('#install-btn');
+            const showLicenseButton = document.querySelector('#show-license-btn');
             const errorDiv = document.querySelector('#error');
             const successDiv = document.querySelector('#success');
+            const licenseInfoDiv = document.querySelector('#license-info');
 
             button.addEventListener('click', () => {
                 errorDiv.innerHTML = '';
                 successDiv.innerHTML = '';
+                licenseInfoDiv.innerHTML = '';
 
                 installLicense();
+            });
+
+            showLicenseButton.addEventListener('click', () => {
+                errorDiv.innerHTML = '';
+                successDiv.innerHTML = '';
+                
+                showLicenseInfo();
             });
 
             function installLicense() {
@@ -40,6 +53,47 @@
                     } catch (error) {
                         console.log(error);
                         errorDiv.innerHTML = error.message;
+                    }
+                });
+            }
+
+            function showLicenseInfo() {
+                cadesplugin.async_spawn(function* () {
+                    try {
+                        const oLicense = yield cadesplugin.CreateObjectAsync("CAdESCOM.CPLicense");
+                        
+                        // Попытаемся получить информацию о лицензии
+                        // Методы могут отличаться в зависимости от версии API
+                        let licenseInfo = "";
+                        
+                        try {
+                            // Пробуем получить номер лицензии
+                            const licenseNumber = yield oLicense.GetLicense();
+                            licenseInfo += "<strong>Номер лицензии:</strong> " + licenseNumber + "<br>";
+                        } catch (e) {
+                            licenseInfo += "<strong>Номер лицензии:</strong> Не удалось получить<br>";
+                        }
+                        
+                        try {
+                            // Пробуем получить статус лицензии
+                            const isValid = yield oLicense.IsValid();
+                            licenseInfo += "<strong>Статус лицензии:</strong> " + (isValid ? "Действительна" : "Недействительна") + "<br>";
+                        } catch (e) {
+                            licenseInfo += "<strong>Статус лицензии:</strong> Не удалось получить<br>";
+                        }
+                        
+                        try {
+                            // Пробуем получить дату окончания лицензии
+                            const expirationDate = yield oLicense.GetExpirationDate();
+                            licenseInfo += "<strong>Дата окончания:</strong> " + expirationDate + "<br>";
+                        } catch (e) {
+                            licenseInfo += "<strong>Дата окончания:</strong> Не удалось получить<br>";
+                        }
+                        
+                        licenseInfoDiv.innerHTML = licenseInfo || "Информация о лицензии недоступна";
+                    } catch (error) {
+                        console.log(error);
+                        errorDiv.innerHTML = "Ошибка при получении информации о лицензии: " + error.message;
                     }
                 });
             }
