@@ -14,7 +14,7 @@
         <button id="install-btn">Установить</button>
         <button id="show-license-btn" style="margin-left: 10px;">Показать лицензию</button>
 
-        <div id="license-info"></div>
+        <div id="license-info" style="margin-top: 20px;"></div>
 
         <div id="error" style="color: red; margin-top: 20px"></div>
         <div id="success" style="color: green; margin-top: 20px"></div>
@@ -68,7 +68,7 @@
                         
                         try {
                             // Пробуем получить номер лицензии
-                            const licenseNumber = yield oLicense.GetLicense();
+                            const licenseNumber = yield oLicense.SerialNumber();
                             licenseInfo += "<strong>Номер лицензии:</strong> " + licenseNumber + "<br>";
                         } catch (e) {
                             licenseInfo += "<strong>Номер лицензии:</strong> Не удалось получить<br>";
@@ -84,7 +84,7 @@
                         
                         try {
                             // Пробуем получить дату окончания лицензии
-                            const expirationDate = yield oLicense.GetExpirationDate();
+                            const expirationDate = yield oLicense.ValidTo();
                             licenseInfo += "<strong>Дата окончания:</strong> " + expirationDate + "<br>";
                         } catch (e) {
                             licenseInfo += "<strong>Дата окончания:</strong> Не удалось получить<br>";
