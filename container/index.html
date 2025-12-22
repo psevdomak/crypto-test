@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>CryptoPro container test</title>
+
+        <script src="https://cryptopro.ru/sites/default/files/products/cades/cadesplugin_api.js"></script>
+    </head>
+    <body>
+        <button id="show-containers-btn">Показать контейнеры</button>
+
+        <div id="containers-info" style="margin-top: 20px;"></div>
+
+        <div id="error" style="color: red; margin-top: 20px"></div>
+        <div id="success" style="color: green; margin-top: 20px"></div>
+
+        <script>
+            const errorDiv = document.querySelector('#error');
+            const successDiv = document.querySelector('#success');
+
+            // Добавляем обработчик для кнопки показа контейнеров
+            const showContainersButton = document.querySelector('#show-containers-btn');
+            showContainersButton.addEventListener('click', () => {
+                errorDiv.innerHTML = '';
+                successDiv.innerHTML = '';
+                const containersInfoDiv = document.querySelector('#containers-info');
+                containersInfoDiv.innerHTML = '';
+                
+                showContainersInfo();
+            });
+
+            function showContainersInfo() {
+                cadesplugin.async_spawn(function* () {
+                    try {
+                        // Создаем объект для работы с хранилищем
+                        const store = yield cadesplugin.CreateObjectAsync("CAdESCOM.Store");
+                        
+                        // Открываем хранилище личных сертификатов (MY)
+                        // CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED = 2 - максимальные права доступа
+                        // CAPICOM_CURRENT_USER_STORE = "My" - хранилище текущего пользователя
+                        yield store.Open(2, "My", 0); // 0 - чтение
+                        
+                        // Получаем коллекцию сертификатов
+                        const certificates = yield store.Certificates;
+                        const count = yield certificates.Count;
+                        
+                        let containersHtml = "<h3>Контейнеры (" + count + ")</h3>";
+                        
+                        if (count > 0) {
+                            containersHtml += "<ul>";
+                            
+                            // Проходим по всем сертификатам
+                            for (let i = 1; i <= count; i++) {
+                                const cert = yield certificates.Item(i);
+                                
+                                // Получаем информацию о сертификате
+                                const subject = yield cert.SubjectName;
+                                const thumbprint = yield cert.Thumbprint;
+                                
+                                containersHtml += '<li>';
+                                containersHtml += '<strong>Имя:</strong> ' + subject + '<br>';
+                                containersHtml += '<strong>Отпечаток:</strong> ' + thumbprint + '<br>';
+                                containersHtml += '<button onclick="deleteContainer(\'' + thumbprint + '\')">Удалить</button>';
+                                containersHtml += '</li>';
+                            }
+                            
+                            containersHtml += "</ul>";
+                        } else {
+                            containersHtml += "<p>Контейнеры не найдены</p>";
+                        }
+                        
+                        // Закрываем хранилище
+                        yield store.Close();
+                        
+                        const containersInfoDiv = document.querySelector('#containers-info');
+                        containersInfoDiv.innerHTML = containersHtml;
+                    } catch (error) {
+                        console.log(error);
+                        errorDiv.innerHTML = "Ошибка при получении списка контейнеров: " + error.message;
+                    }
+                });
+            }
+            
+            // Функция для удаления контейнера
+            function deleteContainer(thumbprint) {
+                cadesplugin.async_spawn(function* () {
+                    try {
+                        // Создаем объект для работы с хранилищем
+                        const store = yield cadesplugin.CreateObjectAsync("CAdESCOM.Store");
+                        
+                        // Открываем хранилище личных сертификатов (MY)
+                        // CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED = 2 - максимальные права доступа
+                        // CAPICOM_CURRENT_USER_STORE = "My" - хранилище текущего пользователя
+                        yield store.Open(2, "My", 1); // 1 - чтение и запись
+                        
+                        // Получаем коллекцию сертификатов
+                        const certificates = yield store.Certificates;
+                        
+                        // Находим сертификат по отпечатку
+                        const certs = yield certificates.Find(0, thumbprint, false); // 0 - поиск по отпечатку
+                        const count = yield certs.Count;
+                        
+                        if (count > 0) {
+                            const cert = yield certs.Item(1);
+                            
+                            // Удаляем сертификат из хранилища
+                            yield store.Remove(cert);
+                            
+                            successDiv.innerHTML = "Контейнер успешно удален";
+                            
+                            // Обновляем список контейнеров
+                            showContainersInfo();
+                        } else {
+                            errorDiv.innerHTML = "Контейнер не найден";
+                        }
+                        
+                        // Закрываем хранилище
+                        yield store.Close();
+                    } catch (error) {
+                        console.log(error);
+                        errorDiv.innerHTML = "Ошибка при удалении контейнера: " + error.message;
+                    }
+                });
+            }
+        </script>
+    </body>
+</html>
