@@ -17,11 +17,15 @@
 
         <button id="generate-btn">Сгенерировать</button>
 
+        <button id="generate-pkey-btn" style="margin-top: 20px;">Сгенерировать только контейнер</button>
+
         <div id="error" style="color: red; margin-top: 20px"></div>
         <div id="success" style="color: green; margin-top: 20px"></div>
 
         <script>
             const button = document.querySelector('#generate-btn');
+            const PKeyButton = document.querySelector('#generate-pkey-btn');
+
             const errorDiv = document.querySelector('#error');
             const successDiv = document.querySelector('#success');
 
@@ -32,12 +36,18 @@
                 createCertificateRequest();
             });
 
+            PKeyButton.addEventListener('click', () => {
+                errorDiv.innerHTML = '';
+                successDiv.innerHTML = '';
+
+                createPKey();
+            });
+
             function createCertificateRequest() {
                 cadesplugin.async_spawn(function* () {
                     try {
                         const containerName = document.getElementById('container-name').value;
                         const distinguishedName = document.getElementById('textarea').value;
-                        console.log(containerName);
 
                         const OAbout = yield cadesplugin.CreateObjectAsync('CAdESCOM.About');
                         const CSPName = yield OAbout.CSPName(80);
@@ -86,6 +96,30 @@
                         yield Enroll.CreateRequest(1);
 
                         successDiv.innerHTML = 'Запрос создан успешно';
+                    } catch (error) {
+                        console.log(error);
+                        errorDiv.innerHTML = error.message;
+                    }
+                });
+            }
+
+            function createPKey() {
+                cadesplugin.async_spawn(function* () {
+                    try {
+                        const containerName = document.getElementById('container-name').value;
+                        const distinguishedName = document.getElementById('textarea').value;
+
+                        const OAbout = yield cadesplugin.CreateObjectAsync('CAdESCOM.About');
+                        const CSPName = yield OAbout.CSPName(80);
+                        const PKey = yield cadesplugin.CreateObjectAsync('X509Enrollment.CX509PrivateKey');
+
+                        yield PKey.propset_ProviderName(CSPName);
+                        yield PKey.propset_ContainerName(containerName);
+                        yield PKey.propset_ProviderType(80);
+                        yield PKey.propset_ExportPolicy(0);
+                        yield PKey.propset_KeySpec(1);
+
+                        successDiv.innerHTML = 'Контейнер создан успешно';
                     } catch (error) {
                         console.log(error);
                         errorDiv.innerHTML = error.message;
