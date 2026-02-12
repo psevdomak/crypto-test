@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>CryptoPro certificate test</title>
+
+        <script src="https://cryptopro.ru/sites/default/files/products/cades/cadesplugin_api.js"></script>
+    </head>
+    <body>
+        <button id="show-certificates-btn">Показать сертификаты</button>
+
+        <div id="certificates-info" style="margin-top: 20px;"></div>
+
+        <div id="error" style="color: red; margin-top: 20px"></div>
+
+        <script>
+            const errorDiv = document.querySelector('#error');
+
+            // Добавляем обработчик для кнопки показа сертификатов
+            const showCertificatesButton = document.querySelector('#show-certificates-btn');
+            showCertificatesButton.addEventListener('click', () => {
+                errorDiv.innerHTML = '';
+                const certificatesInfoDiv = document.querySelector('#certificates-info');
+                certificatesInfoDiv.innerHTML = '';
+                
+                showCertificatesInfo();
+            });
+
+            async function getCertificatesFromStore(storeLocation, storeName) {
+                try {
+                    const store = await cadesplugin.CreateObjectAsync("CAdESCOM.Store");
+                    // Открываем хранилище сертификатов с указанными параметрами
+                    await store.Open(storeLocation, storeName, cadesplugin.CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED);
+                    
+                    const certificates = await store.Certificates;
+                    const count = await certificates.Count;
+                    const certList = [];
+                    
+                    // Проходим по всем сертификатам в хранилище
+                    for (let i = 1; i <= count; i++) {
+                        const certificate = await certificates.Item(i);
+                        
+                        console.log(certificate);
+
+                        // Получаем информацию о сертификате
+                        const subjectName = await certificate.SubjectName;
+                        const issuerName = await certificate.IssuerName;
+                        const validFromDate = await certificate.ValidFromDate;
+                        const validToDate = await certificate.ValidToDate;
+                        const thumbprint = await certificate.Thumbprint;
+                        const serialNumber = await certificate.SerialNumber;
+                        const version = await certificate.Version;
+                        
+                        // Получаем информацию о статусе сертификата
+                        let isValid = false;
+                        let isValidOnDate = false;
+                        try {
+                            // Проверяем действителен ли сертификат на текущую дату
+                            await certificate.IsValid();
+                            isValid = true;
+                        } catch (validityError) {
+                            console.log("Ошибка при проверке валидности сертификата: ", validityError);
+                        }
+                        
+                        try {
+                            // Проверяем действителен ли сертификат на определенную дату
+                            const currentDate = new Date();
+                            await certificate.IsValid(currentDate);
+                            isValidOnDate = true;
+                        } catch (validityDateError) {
+                            console.log("Ошибка при проверке валидности сертификата на дату: ", validityDateError);
+                        }
+                        
+                        // Рассчитываем дни до истечения срока действия
+                        const validToDateObj = new Date(validToDate);
+                        const currentDate = new Date();
+                        const timeDiff = validToDateObj.getTime() - currentDate.getTime();
+                        const daysUntilExpiration = Math.ceil(timeDiff / (1000 * 3600 * 24));
+                        
+                        // Получаем расширения сертификата
+                        const extensions = [];
+                        try {
+                            const certExtensions = await certificate.Extensions();
+                            const extCount = await certExtensions.Count;
+                            
+                            for (let j = 1; j <= extCount; j++) {
+                                const extension = await certExtensions.Item(j);
+                                const extOid = await extension.OID;
+                                const extValue = await extOid.Value;
+                                const extName = await extOid.FriendlyName || await extOid.Value;
+                                
+                                extensions.push({
+                                    name: extName,
+                                    value: extValue
+                                });
+                            }
+                        } catch (extError) {
+                            console.log("Ошибка при получении расширений для сертификата: ", extError);
+                        }
+                        
+                        // Получаем EKU (Extended Key Usage) информацию
+                        const ekus = [];
+                        try {
+                            const extendedKeyUsage = await certificate.ExtendedKeyUsage();
+                            const ekuCollection = await extendedKeyUsage.EKUs;
+                            const ekusCount = await ekuCollection.Count;
+                            
+                            for (let k = 1; k <= ekusCount; k++) {
+                                const eku = await ekuCollection.Item(k);
+                                const ekuName = await eku.Name || "Неизвестно";
+                                const ekuOID = await eku.OID || "Неизвестно";
+                                
+                                ekus.push({
+                                    name: ekuName,
+                                    oid: ekuOID
+                                });
+                            }
+                        } catch (ekuError) {
+                            console.log("Ошибка при получении EKU для сертификата: ", ekuError);
+                        }
+                        
+                        certList.push({
+                            subjectName: subjectName,
+                            issuerName: issuerName,
+                            validFromDate: validFromDate,
+                            validToDate: validToDate,
+                            thumbprint: thumbprint,
+                            serialNumber: serialNumber,
+                            version: version,
+                            isValid: isValid,
+                            isValidOnDate: isValidOnDate,
+                            daysUntilExpiration: daysUntilExpiration,
+                            storeName: storeName,
+                            extensions: extensions,
+                            ekus: ekus
+                        });
+                    }
+                    
+                    // Закрываем хранилище
+                    await store.Close();
+                    
+                    return certList;
+                } catch (error) {
+                    console.log("Ошибка при получении сертификатов из хранилища " + storeName + ": ", error);
+                    return [];
+                }
+            }
+
+            async function showCertificatesInfo() {
+                cadesplugin.async_spawn(function* () {
+                    try {
+                        // Определяем список хранилищ для проверки
+                        const storeConfigurations = [
+                            { location: cadesplugin.CADESCOM_CONTAINER_STORE, name: cadesplugin.CAPICOM_MY_STORE },
+                            { location: cadesplugin.CADESCOM_LOCAL_MACHINE_STORE, name: cadesplugin.CAPICOM_MY_STORE },
+                            { location: cadesplugin.CADESCOM_CURRENT_USER_STORE, name: cadesplugin.CAPICOM_MY_STORE }
+                        ];
+                        const allCertificates = [];
+                        const uniqueCertificates = new Map(); // Для хранения уникальных сертификатов по отпечатку
+                        
+                        // Получаем сертификаты из всех хранилищ
+                        for (const config of storeConfigurations) {
+                            try {
+                                const certs = yield getCertificatesFromStore(config.location, config.name);
+                                allCertificates.push(...certs);
+                            } catch (error) {
+                                console.log("Не удалось получить сертификаты из хранилища " + config.name + ": ", error);
+                            }
+                        }
+                        
+                        // Фильтруем дубликаты по отпечатку
+                        for (const cert of allCertificates) {
+                            if (!uniqueCertificates.has(cert.thumbprint)) {
+                                uniqueCertificates.set(cert.thumbprint, cert);
+                            }
+                        }
+                        
+                        const uniqueCertArray = Array.from(uniqueCertificates.values());
+                        const count = uniqueCertArray.length;
+                        
+                        let certificatesHtml = "<h3>Сертификаты (" + count + ")</h3>";
+                        
+                        if (count > 0) {
+                            certificatesHtml += "<ul>";
+                            
+                            // Проходим по всем уникальным сертификатам
+                            for (const cert of uniqueCertArray) {
+                                certificatesHtml += '<li style="margin-bottom: 12px; border: 1px solid #ccc; padding: 10px;">';
+                                certificatesHtml += '<strong>Субъект:</strong> ' + cert.subjectName + '<br>';
+                                certificatesHtml += '<strong>Издатель:</strong> ' + cert.issuerName + '<br>';
+                                certificatesHtml += '<strong>Серийный номер:</strong> ' + cert.serialNumber + '<br>';
+                                certificatesHtml += '<strong>Версия:</strong> ' + cert.version + '<br>';
+                                certificatesHtml += '<strong>Действителен с:</strong> ' + new Date(cert.validFromDate).toLocaleDateString() + '<br>';
+                                certificatesHtml += '<strong>Действителен по:</strong> ' + new Date(cert.validToDate).toLocaleDateString() + '<br>';
+                                
+                                // Добавляем информацию о валидности
+                                const currentDate = new Date();
+                                const validToDateObj = new Date(cert.validToDate);
+                                const isExpired = currentDate > validToDateObj;
+                                const isNotYetValid = currentDate < new Date(cert.validFromDate);
+                                
+                                if (isExpired) {
+                                    certificatesHtml += '<strong>Статус:</strong> <span style="color: red;">Истек</span><br>';
+                                } else if (isNotYetValid) {
+                                    certificatesHtml += '<strong>Статус:</strong> <span style="color: orange;">Еще не действителен</span><br>';
+                                } else {
+                                    certificatesHtml += '<strong>Статус:</strong> <span style="color: green;">Действителен</span><br>';
+                                }
+                                
+                                if (!isNotYetValid && !isExpired) {
+                                    if (cert.daysUntilExpiration < 0) {
+                                        certificatesHtml += '<strong>Дней до истечения:</strong> <span style="color: red;">Истек</span><br>';
+                                    } else if (cert.daysUntilExpiration <= 30) {
+                                        certificatesHtml += '<strong>Дней до истечения:</strong> <span style="color: orange;">' + cert.daysUntilExpiration + ' (истекает скоро!)</span><br>';
+                                    } else {
+                                        certificatesHtml += '<strong>Дней до истечения:</strong> ' + cert.daysUntilExpiration + '<br>';
+                                    }
+                                }
+                                
+                                certificatesHtml += '<strong>Отпечаток:</strong> ' + cert.thumbprint + '<br>';
+                                certificatesHtml += '<strong>Хранилище:</strong> ' + cert.storeName + '<br>';
+                                
+                                // Выводим расширения сертификата
+                                if (cert.extensions && cert.extensions.length > 0) {
+                                    certificatesHtml += '<strong>Расширения:</strong><ul style="margin-top: 5px; margin-left: 20px;">';
+                                    for (const ext of cert.extensions) {
+                                        certificatesHtml += '<li><strong>' + ext.value + '</strong>   ' + ext.name + '</li>';
+                                    }
+                                    certificatesHtml += '</ul>';
+                                } else {
+                                    certificatesHtml += '<strong>Расширения:</strong> Нет данных<br>';
+                                }
+                                
+                                // Выводим EKU (Extended Key Usage) информацию
+                                if (cert.ekus && cert.ekus.length > 0) {
+                                    certificatesHtml += '<strong>Extended Key Usage (EKU):</strong><ul style="margin-top: 5px; margin-left: 20px;">';
+                                    for (const eku of cert.ekus) {
+                                        certificatesHtml += '<li><strong>' + eku.oid + '</strong>   ' + eku.name + '</li>';
+                                    }
+                                    certificatesHtml += '</ul>';
+                                } else {
+                                    certificatesHtml += '<strong>Extended Key Usage (EKU):</strong> Нет данных<br>';
+                                }
+                                
+                                certificatesHtml += '</li>';
+                            }
+                            
+                            certificatesHtml += "</ul>";
+                        } else {
+                            certificatesHtml += "<p>Сертификаты не найдены</p>";
+                        }
+                        
+                        const certificatesInfoDiv = document.querySelector('#certificates-info');
+                        certificatesInfoDiv.innerHTML = certificatesHtml;
+                    } catch (error) {
+                        console.log(error);
+                        errorDiv.innerHTML = "Ошибка при получении списка сертификатов: " + error.message;
+                    }
+                });
+            }
+        </script>
+    </body>
+</html>
