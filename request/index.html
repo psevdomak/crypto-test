@@ -93,7 +93,9 @@
 
                         yield Enroll.InitializeFromRequest(CertificateRequestPkcs10);
 
-                        yield Enroll.CreateRequest(1);
+                        const req = yield Enroll.CreateRequest(1);
+
+                        console.info(req);
 
                         successDiv.innerHTML = 'Запрос создан успешно';
                     } catch (error) {
