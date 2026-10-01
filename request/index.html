@@ -19,19 +19,47 @@
 
         <button id="generate-pkey-btn" style="margin-top: 20px;">Сгенерировать только контейнер</button>
 
+        <div id="result-block" style="display: none; margin-top: 20px">
+            <label for="csr-output" style="display: block; margin-bottom: 5px">Полученный запрос:</label>
+            <textarea id="csr-output" rows="10" cols="100" readonly wrap="soft"></textarea>
+            <div>
+                <button id="copy-btn" style="margin-top: 10px">Скопировать</button>
+            </div>
+        </div>
+
         <div id="error" style="color: red; margin-top: 20px"></div>
         <div id="success" style="color: green; margin-top: 20px"></div>
 
         <script>
             const button = document.querySelector('#generate-btn');
             const PKeyButton = document.querySelector('#generate-pkey-btn');
+            const resultBlock = document.querySelector('#result-block');
+            const csrOutput = document.querySelector('#csr-output');
+            const copyBtn = document.querySelector('#copy-btn');
 
             const errorDiv = document.querySelector('#error');
             const successDiv = document.querySelector('#success');
 
+            copyBtn.addEventListener('click', () => {
+                const text = csrOutput.value;
+
+                if (navigator.clipboard && window.isSecureContext) {
+                    navigator.clipboard.writeText(text);
+                } else {
+                    csrOutput.select();
+                    document.execCommand('copy');
+                }
+
+                copyBtn.textContent = 'Скопировано';
+                setTimeout(() => {
+                    copyBtn.textContent = 'Скопировать';
+                }, 2000);
+            });
+
             button.addEventListener('click', () => {
                 errorDiv.innerHTML = '';
                 successDiv.innerHTML = '';
+                resultBlock.style.display = 'none';
 
                 createCertificateRequest();
             });
@@ -96,6 +124,9 @@
                         const req = yield Enroll.CreateRequest(1);
 
                         console.info(req);
+
+                        csrOutput.value = req;
+                        resultBlock.style.display = 'block';
 
                         successDiv.innerHTML = 'Запрос создан успешно';
                     } catch (error) {
