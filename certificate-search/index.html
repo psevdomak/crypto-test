@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>CryptoPro certificate search test</title>
+
+        <script src="https://cryptopro.ru/sites/default/files/products/cades/cadesplugin_api.js"></script>
+    </head>
+    <body>
+        <p>
+            <label>
+                Имя контейнера (пусто = все контейнеры):
+                <input id="container-name-input" type="text" size="50" />
+            </label>
+        </p>
+        <p>
+            <label>
+                Префикс CN сертификатов:
+                <input id="cn-prefix-input" type="text" size="50" value="TECH" />
+            </label>
+        </p>
+
+        <button id="find-certs-btn">Найти сертификаты</button>
+
+        <div id="results" style="margin-top: 20px;"></div>
+
+        <div id="error" style="color: red; margin-top: 20px"></div>
+        <div id="success" style="color: green; margin-top: 20px"></div>
+
+        <script>
+            const errorDiv = document.querySelector('#error');
+            const successDiv = document.querySelector('#success');
+            const resultsDiv = document.querySelector('#results');
+
+            let foundCertificates = [];
+
+            // Добавляем обработчик для кнопки поиска сертификатов
+            const findCertsButton = document.querySelector('#find-certs-btn');
+            findCertsButton.addEventListener('click', () => {
+                errorDiv.innerHTML = '';
+                successDiv.innerHTML = '';
+                resultsDiv.innerHTML = '';
+                foundCertificates = [];
+
+                findCertificates();
+            });
+
+            function getContainerFilter() {
+                return document.querySelector('#container-name-input').value.trim();
+            }
+
+            function getCnPrefix() {
+                return document.querySelector('#cn-prefix-input').value.trim();
+            }
+
+            // Аналог parseSubjectData из @sme-foundation/crypto-plugin-adapter:
+            // разбирает строку вида "CN=..., O=..." в объект {CN: ..., O: ...}
+            function parseSubjectData(data) {
+                const parsedData = {};
+
+                data.split(',')
+                    .map((param) => param.trim().split('='))
+                    .forEach(([key, value]) => {
+                        parsedData[key] = value;
+                    });
+
+                return parsedData;
+            }
+
+            function matchesCnPrefix(subjectName) {
+                const prefix = getCnPrefix();
+                const commonName = (parseSubjectData(subjectName).CN || '').replace(/^"(.*)"$/, '$1');
+
+                return commonName.toLowerCase().startsWith(prefix.toLowerCase());
+            }
+
+            /** Нормализация SHA-1-отпечатка сертификата. */
+            function normalizeThumbprint(thumbprint) {
+                return thumbprint.replace(/\s/g, '').toUpperCase();
+            }
+
+            function escapeHtml(value) {
+                return String(value)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;');
+            }
+
+            // Поиск сертификатов по префиксу CN среди сертификатов контейнеров.
+            // Сами контейнеры, закрытые ключи и сертификаты внутри контейнеров не изменяются.
+            function findCertificates() {
+                if (typeof cadesplugin === 'undefined') {
+                    errorDiv.innerHTML = 'Плагин КриптоПро не загружен';
+
+                    return;
+                }
+
+                const containerFilter = getContainerFilter();
+                const cnPrefix = getCnPrefix();
+
+                if (!cnPrefix) {
+                    errorDiv.innerHTML = 'Укажите префикс CN сертификатов';
+
+                    return;
+                }
+
+                cadesplugin.async_spawn(function* () {
+                    try {
+                        const cspInformation = yield cadesplugin.CreateObjectAsync('CAdESCOM.CPCSPInformation');
+
+                        const containers = yield cspInformation.EnumContainers();
+                        const containersCount = yield containers.Count;
+
+                        const found = [];
+                        const warnings = [];
+                        let containersScanned = 0;
+                        let containerFound = !containerFilter;
+
+                        for (let i = 0; i < containersCount; i++) {
+                            const container = yield containers.ItemByIndex(i);
+
+                            const name = yield container.Name;
+                            const uniqueName = yield container.UniqueName;
+                            const fqcn = yield container.FQCN;
+
+                            if (
+                                containerFilter !== name &&
+                                containerFilter !== uniqueName &&
+                                containerFilter !== fqcn
+                            ) {
+                                continue;
+                            }
+
+                            containerFound = true;
+                            containersScanned++;
+
+                            try {
+                                yield container.propset_Silent(true);
+
+                                const keys = yield container.Keys;
+                                const keysCount = yield keys.Count;
+
+                                for (let j = 0; j < keysCount; j++) {
+                                    const key = yield keys.ItemByIndex(j);
+                                    const hasCertificate = yield key.HasCertificate;
+
+                                    if (!hasCertificate) {
+                                        continue;
+                                    }
+
+                                    const certificate = yield key.Certificate;
+                                    const subjectName = yield certificate.SubjectName;
+
+                                    if (!matchesCnPrefix(subjectName)) {
+                                        continue;
+                                    }
+
+                                    const thumbprint = yield certificate.Thumbprint;
+                                    const issuerName = yield certificate.IssuerName;
+                                    const validToDate = yield certificate.ValidToDate;
+
+                                    found.push({
+                                        containerName: name,
+                                        thumbprint: normalizeThumbprint(thumbprint),
+                                        subjectName: subjectName,
+                                        issuerName: issuerName,
+                                        validToDate: validToDate
+                                    });
+                                }
+                            } catch (containerError) {
+                                console.log('Ошибка при обработке контейнера ' + name + ': ', containerError);
+                                warnings.push('Контейнер "' + name + '": ' + containerError.message);
+                            }
+                        }
+
+                        if (!containerFound) {
+                            errorDiv.innerHTML = 'Указанный контейнер не найден';
+
+                            return;
+                        }
+
+                        foundCertificates = found;
+                        renderResults(found, containersScanned, warnings);
+                    } catch (error) {
+                        console.log(error);
+                        errorDiv.innerHTML = 'Ошибка при поиске сертификатов: ' + error.message;
+                    }
+                });
+            }
+
+            function renderResults(found, containersScanned, warnings) {
+                let html = '<h3>Найдено сертификатов: ' + found.length + ' (просмотрено контейнеров: ' + containersScanned + ')</h3>';
+
+                if (warnings.length > 0) {
+                    html += '<p style="color: orange;">Предупреждения:<ul style="margin-left: 20px;">';
+
+                    for (const warning of warnings) {
+                        html += '<li>' + escapeHtml(warning) + '</li>';
+                    }
+
+                    html += '</ul></p>';
+                }
+
+                if (found.length === 0) {
+                    html += '<p>Сертификаты не найдены</p>';
+                    resultsDiv.innerHTML = html;
+
+                    return;
+                }
+
+                // Отпечатки могут повторяться (один сертификат в ключах разных контейнеров) —
+                // удаляем по уникальному набору
+                const uniqueThumbprints = Array.from(new Set(found.map((cert) => cert.thumbprint)));
+
+                html += '<button onclick="deleteCerts([\'' + uniqueThumbprints.join('\',\'') + '\'])">Удалить все найденные (' + found.length + ')</button>';
+                html += '<ul>';
+
+                for (const cert of found) {
+                    html += '<li style="margin-bottom: 12px; border: 1px solid #ccc; padding: 10px;">';
+                    html += '<strong>Контейнер:</strong> ' + escapeHtml(cert.containerName) + '<br>';
+                    html += '<strong>Субъект:</strong> ' + escapeHtml(cert.subjectName) + '<br>';
+                    html += '<strong>Издатель:</strong> ' + escapeHtml(cert.issuerName) + '<br>';
+                    html += '<strong>Отпечаток:</strong> ' + escapeHtml(cert.thumbprint) + '<br>';
+                    html += '<strong>Действителен по:</strong> ' + new Date(cert.validToDate).toLocaleString() + '<br>';
+                    html += '<button onclick="deleteCerts([\'' + cert.thumbprint + '\'])">Удалить</button>';
+                    html += '</li>';
+                }
+
+                html += '</ul>';
+                resultsDiv.innerHTML = html;
+            }
+
+            // Удаляет сертификаты из личного хранилища текущего пользователя.
+            // Контейнеры, закрытые ключи и сертификаты внутри контейнеров не изменяются.
+            function deleteCertificates(thumbprints) {
+                const requestedNames = new Set(thumbprints.map(normalizeThumbprint));
+
+                return new Promise((resolve, reject) => {
+                    cadesplugin.async_spawn(function* () {
+                        let store = null;
+                        let storeOpened = false;
+
+                        try {
+                            store = yield cadesplugin.CreateObjectAsync('CAdESCOM.Store');
+
+                            yield store.Open(
+                                cadesplugin.CAPICOM_CURRENT_USER_STORE,
+                                cadesplugin.CAPICOM_MY_STORE,
+                                cadesplugin.CAPICOM_STORE_OPEN_READ_WRITE,
+                            );
+
+                            storeOpened = true;
+
+                            const certificates = yield store.Certificates;
+                            let deletedCount = 0;
+
+                            for (const thumbprint of requestedNames) {
+                                const found = yield certificates.Find(
+                                    cadesplugin.CAPICOM_CERTIFICATE_FIND_SHA1_HASH,
+                                    thumbprint,
+                                );
+
+                                const count = yield found.Count;
+
+                                for (let i = 1; i <= count; i++) {
+                                    const certificate = yield found.Item(i);
+                                    const subjectName = yield certificate.SubjectName;
+                                    const actualThumbprint = yield certificate.Thumbprint;
+
+                                    if (
+                                        !matchesCnPrefix(subjectName) ||
+                                        normalizeThumbprint(actualThumbprint) !== thumbprint
+                                    ) {
+                                        continue;
+                                    }
+
+                                    yield store.Remove(certificate);
+                                    deletedCount++;
+                                }
+                            }
+
+                            resolve(deletedCount);
+                        } catch (error) {
+                            reject(error);
+                        } finally {
+                            if (storeOpened) {
+                                try {
+                                    yield store.Close();
+                                } catch (closeError) {
+                                    console.warn('deleteCertificates: ошибка закрытия хранилища', closeError);
+                                }
+                            }
+                        }
+                    });
+                });
+            }
+
+            function deleteCerts(thumbprints) {
+                if (typeof cadesplugin === 'undefined') {
+                    errorDiv.innerHTML = 'Плагин КриптоПро не загружен';
+
+                    return;
+                }
+
+                cadesplugin.async_spawn(function* () {
+                    errorDiv.innerHTML = '';
+                    successDiv.innerHTML = '';
+
+                    try {
+                        const deletedCount = yield deleteCertificates(thumbprints);
+
+                        successDiv.innerHTML = 'Удалено сертификатов: ' + deletedCount;
+
+                        // Обновляем результаты поиска
+                        findCertificates();
+                    } catch (error) {
+                        console.log(error);
+                        errorDiv.innerHTML = 'Ошибка при удалении сертификатов: ' + error.message;
+                    }
+                });
+            }
+        </script>
+    </body>
+</html>
