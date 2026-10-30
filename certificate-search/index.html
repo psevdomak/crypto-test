@@ -107,7 +107,13 @@
 
                 cadesplugin.async_spawn(function* () {
                     try {
-                        const cspInformation = yield cadesplugin.CreateObjectAsync('CAdESCOM.CPCSPInformation');
+                        // Получаем имя CSP пользователя и инициализируем им X509Enrollment.CCspInformation
+                        const oAbout = yield cadesplugin.CreateObjectAsync('CAdESCOM.About');
+                        const cspName = yield oAbout.CSPName(80);
+
+                        const cspInformation = yield cadesplugin.CreateObjectAsync('X509Enrollment.CCspInformation');
+
+                        yield cspInformation.InitializeFromName(cspName);
 
                         const containers = yield cspInformation.EnumContainers();
                         const containersCount = yield containers.Count;
@@ -120,15 +126,33 @@
                         for (let i = 0; i < containersCount; i++) {
                             const container = yield containers.ItemByIndex(i);
 
+                            // Name есть всегда, остальные свойства могут отсутствовать
+                            // в зависимости от версии CSP/плагина
                             const name = yield container.Name;
-                            const uniqueName = yield container.UniqueName;
-                            const fqcn = yield container.FQCN;
 
-                            if (
-                                containerFilter !== name &&
-                                containerFilter !== uniqueName &&
-                                containerFilter !== fqcn
-                            ) {
+                            let uniqueName = '';
+
+                            try {
+                                uniqueName = yield container.UniqueName;
+                            } catch (uniqueNameError) {
+                                uniqueName = '';
+                            }
+
+                            let fqcn = '';
+
+                            try {
+                                fqcn = yield container.FQCN;
+                            } catch (fqcnError) {
+                                fqcn = '';
+                            }
+
+                            // Пустой фильтр = все контейнеры
+                            const matchesContainerFilter = !containerFilter ||
+                                containerFilter === name ||
+                                containerFilter === uniqueName ||
+                                containerFilter === fqcn;
+
+                            if (!matchesContainerFilter) {
                                 continue;
                             }
 
@@ -136,7 +160,11 @@
                             containersScanned++;
 
                             try {
-                                yield container.propset_Silent(true);
+                                try {
+                                    yield container.propset_Silent(true);
+                                } catch (silentError) {
+                                    // свойства Silent может не быть — не критично
+                                }
 
                                 const keys = yield container.Keys;
                                 const keysCount = yield keys.Count;
@@ -170,7 +198,43 @@
                                 }
                             } catch (containerError) {
                                 console.log('Ошибка при обработке контейнера ' + name + ': ', containerError);
-                                warnings.push('Контейнер "' + name + '": ' + containerError.message);
+
+                                // Фолбэк: открываем контейнер как закрытый ключ напрямую
+                                try {
+                                    const privateKey = yield cadesplugin.CreateObjectAsync(
+                                        'X509Enrollment.CX509PrivateKey',
+                                    );
+
+                                    yield privateKey.propset_ProviderName(cspName);
+                                    yield privateKey.propset_ContainerName(name);
+                                    yield privateKey.propset_Silent(true);
+
+                                    const certificate = yield privateKey.Certificate;
+                                    const subjectName = yield certificate.SubjectName;
+
+                                    if (matchesCnPrefix(subjectName)) {
+                                        const thumbprint = yield certificate.Thumbprint;
+                                        const issuerName = yield certificate.IssuerName;
+                                        const validToDate = yield certificate.ValidToDate;
+
+                                        found.push({
+                                            containerName: name,
+                                            thumbprint: normalizeThumbprint(thumbprint),
+                                            subjectName: subjectName,
+                                            issuerName: issuerName,
+                                            validToDate: validToDate
+                                        });
+                                    }
+                                } catch (fallbackError) {
+                                    console.log(
+                                        'Фолбэк CX509PrivateKey для контейнера ' + name + ': ',
+                                        fallbackError,
+                                    );
+                                    warnings.push(
+                                        'Контейнер "' + name + '": ' + containerError.message +
+                                        ' (фолбэк: ' + fallbackError.message + ')',
+                                    );
+                                }
                             }
                         }
 
