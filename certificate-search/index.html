@@ -9,7 +9,7 @@
     <body>
         <p>
             <label>
-                Имя контейнера (пусто = все контейнеры):
+                Имя контейнера (можно путь с ридером):
                 <input id="container-name-input" type="text" size="50" />
             </label>
         </p>
@@ -32,15 +32,11 @@
             const successDiv = document.querySelector('#success');
             const resultsDiv = document.querySelector('#results');
 
-            let foundCertificates = [];
-
-            // Добавляем обработчик для кнопки поиска сертификатов
             const findCertsButton = document.querySelector('#find-certs-btn');
             findCertsButton.addEventListener('click', () => {
                 errorDiv.innerHTML = '';
                 successDiv.innerHTML = '';
                 resultsDiv.innerHTML = '';
-                foundCertificates = [];
 
                 findCertificates();
             });
@@ -79,6 +75,17 @@
                 return thumbprint.replace(/\s/g, '').toUpperCase();
             }
 
+            // Аналог extractContainerName из common/crypto:
+            // из пути с ридером («\\.\Reader\SCARD\name») делает имя в форме CSP («SCARD\name»)
+            function extractContainerName(uniqueContainerName) {
+                return (uniqueContainerName.match(/SCARD.+/) || [''])[0];
+            }
+
+            // Имя контейнера из поля ввода, резолвнутое к форме CSP
+            function getRequestedContainerName() {
+                return extractContainerName(getContainerFilter());
+            }
+
             function escapeHtml(value) {
                 return String(value)
                     .replace(/&/g, '&amp;')
@@ -87,8 +94,44 @@
                     .replace(/"/g, '&quot;');
             }
 
-            // Поиск сертификатов по префиксу CN среди сертификатов контейнеров.
-            // Сами контейнеры, закрытые ключи и сертификаты внутри контейнеров не изменяются.
+            // Портированный findExistingContainer из common/crypto:
+            // перебирает контейнеры CSP и возвращает первый, чей UniqueName
+            // совпал с искомым именем (или undefined, если совпадений нет)
+            function findExistingContainer(containerName) {
+                return new Promise((resolve, reject) => {
+                    cadesplugin.async_spawn(function* () {
+                        try {
+                            const oAbout = yield cadesplugin.CreateObjectAsync('CAdESCOM.About');
+                            const cspName = yield oAbout.CSPName(80);
+
+                            const cspInformation = yield cadesplugin.CreateObjectAsync('X509Enrollment.CCspInformation');
+
+                            yield cspInformation.InitializeFromName(cspName);
+
+                            const containers = yield cspInformation.EnumContainers();
+                            const containersCount = yield containers.Count;
+
+                            for (let i = 0; i < containersCount; i++) {
+                                const container = yield containers.ItemByIndex(i);
+                                const containerUniqueName = yield container.UniqueName;
+
+                                if (containerUniqueName === containerName) {
+                                    resolve(container);
+
+                                    return;
+                                }
+                            }
+
+                            resolve(undefined);
+                        } catch (error) {
+                            reject(error);
+                        }
+                    });
+                });
+            }
+
+            // Поиск сертификатов по префиксу CN на ключах найденного контейнера.
+            // Контейнер, закрытые ключи и сертификаты внутри контейнеров не изменяются.
             function findCertificates() {
                 if (typeof cadesplugin === 'undefined') {
                     errorDiv.innerHTML = 'Плагин КриптоПро не загружен';
@@ -96,8 +139,14 @@
                     return;
                 }
 
-                const containerFilter = getContainerFilter();
+                const requestedName = getRequestedContainerName();
                 const cnPrefix = getCnPrefix();
+
+                if (!requestedName) {
+                    errorDiv.innerHTML = 'Укажите имя контейнера (путь с ридером подойдёт)';
+
+                    return;
+                }
 
                 if (!cnPrefix) {
                     errorDiv.innerHTML = 'Укажите префикс CN сертификатов';
@@ -107,145 +156,50 @@
 
                 cadesplugin.async_spawn(function* () {
                     try {
-                        // Получаем имя CSP пользователя и инициализируем им X509Enrollment.CCspInformation
-                        const oAbout = yield cadesplugin.CreateObjectAsync('CAdESCOM.About');
-                        const cspName = yield oAbout.CSPName(80);
+                        const container = yield findExistingContainer(requestedName);
 
-                        const cspInformation = yield cadesplugin.CreateObjectAsync('X509Enrollment.CCspInformation');
-
-                        yield cspInformation.InitializeFromName(cspName);
-
-                        const containers = yield cspInformation.EnumContainers();
-                        const containersCount = yield containers.Count;
-
-                        const found = [];
-                        const warnings = [];
-                        let containersScanned = 0;
-                        let containerFound = !containerFilter;
-
-                        for (let i = 0; i < containersCount; i++) {
-                            const container = yield containers.ItemByIndex(i);
-
-                            // Name есть всегда, остальные свойства могут отсутствовать
-                            // в зависимости от версии CSP/плагина
-                            const name = yield container.Name;
-
-                            let uniqueName = '';
-
-                            try {
-                                uniqueName = yield container.UniqueName;
-                            } catch (uniqueNameError) {
-                                uniqueName = '';
-                            }
-
-                            let fqcn = '';
-
-                            try {
-                                fqcn = yield container.FQCN;
-                            } catch (fqcnError) {
-                                fqcn = '';
-                            }
-
-                            // Пустой фильтр = все контейнеры
-                            const matchesContainerFilter = !containerFilter ||
-                                containerFilter === name ||
-                                containerFilter === uniqueName ||
-                                containerFilter === fqcn;
-
-                            if (!matchesContainerFilter) {
-                                continue;
-                            }
-
-                            containerFound = true;
-                            containersScanned++;
-
-                            try {
-                                try {
-                                    yield container.propset_Silent(true);
-                                } catch (silentError) {
-                                    // свойства Silent может не быть — не критично
-                                }
-
-                                const keys = yield container.Keys;
-                                const keysCount = yield keys.Count;
-
-                                for (let j = 0; j < keysCount; j++) {
-                                    const key = yield keys.ItemByIndex(j);
-                                    const hasCertificate = yield key.HasCertificate;
-
-                                    if (!hasCertificate) {
-                                        continue;
-                                    }
-
-                                    const certificate = yield key.Certificate;
-                                    const subjectName = yield certificate.SubjectName;
-
-                                    if (!matchesCnPrefix(subjectName)) {
-                                        continue;
-                                    }
-
-                                    const thumbprint = yield certificate.Thumbprint;
-                                    const issuerName = yield certificate.IssuerName;
-                                    const validToDate = yield certificate.ValidToDate;
-
-                                    found.push({
-                                        containerName: name,
-                                        thumbprint: normalizeThumbprint(thumbprint),
-                                        subjectName: subjectName,
-                                        issuerName: issuerName,
-                                        validToDate: validToDate
-                                    });
-                                }
-                            } catch (containerError) {
-                                console.log('Ошибка при обработке контейнера ' + name + ': ', containerError);
-
-                                // Фолбэк: открываем контейнер как закрытый ключ напрямую
-                                try {
-                                    const privateKey = yield cadesplugin.CreateObjectAsync(
-                                        'X509Enrollment.CX509PrivateKey',
-                                    );
-
-                                    yield privateKey.propset_ProviderName(cspName);
-                                    yield privateKey.propset_ContainerName(name);
-                                    yield privateKey.propset_Silent(true);
-
-                                    const certificate = yield privateKey.Certificate;
-                                    const subjectName = yield certificate.SubjectName;
-
-                                    if (matchesCnPrefix(subjectName)) {
-                                        const thumbprint = yield certificate.Thumbprint;
-                                        const issuerName = yield certificate.IssuerName;
-                                        const validToDate = yield certificate.ValidToDate;
-
-                                        found.push({
-                                            containerName: name,
-                                            thumbprint: normalizeThumbprint(thumbprint),
-                                            subjectName: subjectName,
-                                            issuerName: issuerName,
-                                            validToDate: validToDate
-                                        });
-                                    }
-                                } catch (fallbackError) {
-                                    console.log(
-                                        'Фолбэк CX509PrivateKey для контейнера ' + name + ': ',
-                                        fallbackError,
-                                    );
-                                    warnings.push(
-                                        'Контейнер "' + name + '": ' + containerError.message +
-                                        ' (фолбэк: ' + fallbackError.message + ')',
-                                    );
-                                }
-                            }
-                        }
-
-                        if (!containerFound) {
+                        if (!container) {
                             errorDiv.innerHTML = 'Указанный контейнер не найден';
 
                             return;
                         }
 
-                        foundCertificates = found;
-                        renderResults(found, containersScanned, warnings);
+                        yield container.propset_Silent(true);
+
+                        const containerName = yield container.Name;
+                        const keys = yield container.Keys;
+                        const keysCount = yield keys.Count;
+                        const found = [];
+
+                        for (let j = 0; j < keysCount; j++) {
+                            const key = yield keys.ItemByIndex(j);
+                            const hasCertificate = yield key.HasCertificate;
+
+                            if (!hasCertificate) {
+                                continue;
+                            }
+
+                            const certificate = yield key.Certificate;
+                            const subjectName = yield certificate.SubjectName;
+
+                            if (!matchesCnPrefix(subjectName)) {
+                                continue;
+                            }
+
+                            const thumbprint = yield certificate.Thumbprint;
+                            const issuerName = yield certificate.IssuerName;
+                            const validToDate = yield certificate.ValidToDate;
+
+                            found.push({
+                                containerName: containerName,
+                                thumbprint: normalizeThumbprint(thumbprint),
+                                subjectName: subjectName,
+                                issuerName: issuerName,
+                                validToDate: validToDate
+                            });
+                        }
+
+                        renderResults(found);
                     } catch (error) {
                         console.log(error);
                         errorDiv.innerHTML = 'Ошибка при поиске сертификатов: ' + error.message;
@@ -253,22 +207,11 @@
                 });
             }
 
-            function renderResults(found, containersScanned, warnings) {
-                let html = '<h3>Найдено сертификатов: ' + found.length + ' (просмотрено контейнеров: ' + containersScanned + ')</h3>';
-
-                if (warnings.length > 0) {
-                    html += '<p style="color: orange;">Предупреждения:<ul style="margin-left: 20px;">';
-
-                    for (const warning of warnings) {
-                        html += '<li>' + escapeHtml(warning) + '</li>';
-                    }
-
-                    html += '</ul></p>';
-                }
+            function renderResults(found) {
+                let html = '<h3>Найдено сертификатов: ' + found.length + '</h3>';
 
                 if (found.length === 0) {
-                    html += '<p>Сертификаты не найдены</p>';
-                    resultsDiv.innerHTML = html;
+                    resultsDiv.innerHTML = html + '<p>Сертификаты не найдены</p>';
 
                     return;
                 }
@@ -298,7 +241,7 @@
             // Удаляет сертификаты из личного хранилища текущего пользователя.
             // Контейнеры, закрытые ключи и сертификаты внутри контейнеров не изменяются.
             function deleteCertificates(thumbprints) {
-                const requestedNames = new Set(thumbprints.map(normalizeThumbprint));
+                const requestedThumbprints = new Set(thumbprints);
 
                 return new Promise((resolve, reject) => {
                     cadesplugin.async_spawn(function* () {
@@ -319,7 +262,7 @@
                             const certificates = yield store.Certificates;
                             let deletedCount = 0;
 
-                            for (const thumbprint of requestedNames) {
+                            for (const thumbprint of requestedThumbprints) {
                                 const found = yield certificates.Find(
                                     cadesplugin.CAPICOM_CERTIFICATE_FIND_SHA1_HASH,
                                     thumbprint,
@@ -349,11 +292,7 @@
                             reject(error);
                         } finally {
                             if (storeOpened) {
-                                try {
-                                    yield store.Close();
-                                } catch (closeError) {
-                                    console.warn('deleteCertificates: ошибка закрытия хранилища', closeError);
-                                }
+                                yield store.Close();
                             }
                         }
                     });
