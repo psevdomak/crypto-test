@@ -48,21 +48,38 @@ function sameToken(first, second) {
     return first && first.serialNumber === second.serialNumber && first.family === second.family;
 }
 
-function identifyContainer(container) {
-    const fromId = containerIdentity(container.id);
-    const fromFqcn = containerIdentity(container.fqcn);
-    const token = fromId ?? fromFqcn;
-    if (!token) {
-        throw new Error('В имени созданного контейнера не найден серийный номер Рутокена из 8–10 цифр.');
-    }
+async function identifyContainer(container, adapter, report) {
+    const { id, fqcn, reader, media } = container;
+    const fromId = containerIdentity(id);
+    const fromFqcn = containerIdentity(fqcn);
+    const fromMedia = rutokenIdentity(media);
+    const fromPath = fromId ?? fromFqcn;
     if (fromId && fromFqcn && (!sameToken(fromId, fromFqcn) || fromId.keyFormat !== fromFqcn.keyFormat)) {
         throw new Error('UniqueName и FQCN указывают на разные токены или форматы.');
     }
-    const fromMedia = rutokenIdentity(container.media);
-    if (fromMedia && !sameToken(fromMedia, token)) {
+    if (fromPath && fromMedia && !sameToken(fromMedia, fromPath)) {
         throw new Error('Media контейнера указывает на другой токен.');
     }
-    return token;
+    if (fromPath || fromMedia) {
+        const source = fromId ? 'UniqueName' : fromFqcn ? 'FQCN' : 'Media контейнера';
+        return { ...(fromPath ?? fromMedia), source };
+    }
+
+    report('Поиск серийного номера по считывателю', { uniqueName: id, fqcn, reader, media });
+    if (reader) {
+        const modes = await adapter.readers();
+        const matches = modes.filter((mode) => mode.reader === reader || mode.label === reader);
+        report('Ответ GetReaderModes', { matches, ...(matches.length ? {} : { available: modes }) });
+        const activeModes = matches.filter((mode) => mode.media !== 'NO_MEDIA');
+        const identities = activeModes.map((mode) => rutokenIdentity(mode.media));
+        const [token] = identities;
+        if (token && identities.every((identity) => sameToken(identity, token)
+            && identity.keyFormat === token.keyFormat)) {
+            return { ...token, source: 'Media считывателя' };
+        }
+    }
+
+    throw new Error('Не удалось однозначно определить серийный номер Рутокена из 8–10 цифр и режим. См. данные контейнера и считывателей в журнале.');
 }
 
 function findTarget(readers, token, keyFormat) {
@@ -88,7 +105,7 @@ function findTarget(readers, token, keyFormat) {
 
 export async function reissue({ adapter, mockFormat, name, subject, report }) {
     const initial = await adapter.generate(name, subject);
-    const token = identifyContainer(initial);
+    const token = await identifyContainer(initial, adapter, report);
     const { serialNumber, keyFormat: initialFormat } = token;
     report('Определён выбранный токен', { ...token, reader: initial.reader });
 
@@ -120,7 +137,7 @@ export async function reissue({ adapter, mockFormat, name, subject, report }) {
         throw new Error('Целевой считыватель изменился после удаления контейнера.');
     }
     const final = await adapter.generate(name, subject, { keyFormat, reader });
-    const finalToken = identifyContainer(final);
+    const finalToken = await identifyContainer(final, adapter, report);
     report('Проверка итогового контейнера', finalToken);
     if (!sameToken(finalToken, token) || finalToken.keyFormat !== keyFormat || final.reader !== reader) {
         throw new Error('Итоговый контейнер создан на другом считывателе, токене или в другом формате.');

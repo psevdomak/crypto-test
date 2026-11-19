@@ -100,9 +100,9 @@ test('missing or ambiguous target aborts before removal', async () => {
 
 test('unknown or out-of-range serial never reaches the mock', async () => {
     for (const id of ['SCARD\\some_other_device_3a5a7554\\key', 'SCARD\\rutoken_ecp_00000001\\key']) {
-        const { run, calls } = scenario({ initial: { id, media: cspMedia }, desired: 'CSP' });
-        await assert.rejects(run, /не найден серийный номер/);
-        assert.equal(calls.length, 1);
+        const { run, calls } = scenario({ initial: { id }, desired: 'CSP' });
+        await assert.rejects(run, /Не удалось однозначно определить серийный номер/);
+        assert.ok(!calls.some(([name]) => name.startsWith('Мок POST')));
     }
 });
 
@@ -118,5 +118,34 @@ test('wrong token or format cannot produce a final result', async () => {
     for (const finalMode of [{ ...modes.CSP, media: otherMedia }, modes.PKCS11]) {
         const { run } = scenario({ initial: container(modes.PKCS11), desired: 'CSP', finalMode });
         await assert.rejects(run, /Итоговый контейнер создан на другом/);
+    }
+});
+
+test('recovers the serial when only the container Media has the token ID', async () => {
+    const { run, calls } = scenario({
+        initial: { ...modes.CSP, id: 'opaque', fqcn: 'opaque-fqcn' }, desired: 'CSP',
+    });
+    assert.equal((await run()).serialNumber, serialNumber);
+    assert.equal(calls.find(([name]) => name === 'Определён выбранный токен')[1].source, 'Media контейнера');
+});
+
+test('recovers the serial from an unambiguous matching reader only', async () => {
+    const { run, calls } = scenario({
+        initial: { reader: 'Selected reader nickname', id: 'opaque' },
+        readers: [{ ...modes.CSP, label: 'Selected reader nickname' }, other],
+        desired: 'CSP',
+    });
+    assert.equal((await run()).serialNumber, serialNumber);
+    assert.equal(calls.find(([name]) => name === 'Определён выбранный токен')[1].source, 'Media считывателя');
+});
+
+test('another reader or multiple modes for the selected reader cannot determine the format', async () => {
+    for (const readers of [[other], [modes.CSP, { ...modes.PKCS11, reader: modes.CSP.reader }]]) {
+        const { run, calls } = scenario({
+            initial: { reader: modes.CSP.reader, id: 'opaque', fqcn: 'opaque-fqcn' }, readers, desired: 'CSP',
+        });
+        await assert.rejects(run, /Не удалось однозначно определить/);
+        assert.ok(calls.some(([name, details]) => name === 'Ответ GetReaderModes' && 'matches' in details));
+        assert.ok(!calls.some(([name]) => name.startsWith('Мок POST') || name === 'remove'));
     }
 });

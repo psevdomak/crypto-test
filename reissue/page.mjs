@@ -9,7 +9,8 @@ const log = element('log');
 let adapter;
 
 function report(message, details) {
-    log.textContent += message + (details === undefined ? '' : '\n' + JSON.stringify(details, null, 2)) + '\n\n';
+    const entry = message + (details === undefined ? '' : '\n' + JSON.stringify(details, null, 2));
+    log.prepend(document.createTextNode(entry + '\n\n'));
 }
 
 async function perform(operation) {
