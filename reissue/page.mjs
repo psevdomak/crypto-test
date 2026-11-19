@@ -7,7 +7,6 @@ const status = element('status');
 const cleanup = element('cleanup');
 const log = element('log');
 let adapter;
-let readerModes = [];
 
 function report(message, details) {
     log.textContent += message + (details === undefined ? '' : '\n' + JSON.stringify(details, null, 2)) + '\n\n';
@@ -41,18 +40,9 @@ async function perform(operation) {
 }
 
 element('readers').addEventListener('click', () => perform(async () => {
-    readerModes = await adapter.readers();
-    report('Режимы считывателей', readerModes);
-    for (const id of ['csp', 'pkcs11']) {
-        const select = element(id);
-        select.replaceChildren(new Option('Не задан', ''));
-        readerModes.forEach(({ reader, media, flags }, index) => {
-            const option = new Option(reader + ' | Media: ' + media + ' | флаги: ' + flags, index);
-            option.disabled = !reader || !media;
-            select.add(option);
-        });
-    }
-    return 'Режимов считывателей: ' + readerModes.length;
+    const readers = await adapter.readers();
+    report('Режимы считывателей', readers);
+    return 'Режимов считывателей: ' + readers.length;
 }));
 
 form.addEventListener('submit', (event) => {
@@ -60,31 +50,18 @@ form.addEventListener('submit', (event) => {
     element('result').hidden = true;
     element('csr').value = '';
     perform(async () => {
-        const modes = {};
-        for (const [id, format] of [['csp', 'CSP'], ['pkcs11', 'PKCS11']]) {
-            const value = element(id).value;
-            if (value !== '') modes[format] = readerModes[Number(value)];
-        }
-        const serialNumber = element('serial').value.trim();
         const mockFormat = element('mock').value;
         const subject = element('subject').value.trim();
-        if (!serialNumber || !subject || !Object.keys(modes).length) {
-            throw new Error('Укажите серийный номер, субъект и хотя бы один контрольный считыватель.');
-        }
-        if (modes.CSP && modes.PKCS11 && modes.CSP.reader === modes.PKCS11.reader) {
-            throw new Error('Для двух форматов нужны разные имена считывателей.');
-        }
-        if (mockFormat !== 'error' && !modes[mockFormat]) {
-            throw new Error('Для ответа ' + mockFormat + ' укажите контрольный считыватель.');
-        }
+        if (!subject) throw new Error('Укажите субъект CSR.');
         const name = 'reissue-' + crypto.randomUUID();
-        report('Запуск прогона', { name, mockFormat, modes });
-        const result = await reissue({ adapter, modes, serialNumber, mockFormat, name, subject, report });
+        report('Запуск прогона', { name, mockFormat });
+        const result = await reissue({ adapter, mockFormat, name, subject, report });
         element('csr').value = result.csr;
         element('result').hidden = false;
-        return result.regenerated
+        const serial = 'Серийный номер Рутокена: ' + result.serialNumber + '. ';
+        return serial + (result.regenerated
             ? 'CSR создан повторно. Сверьте режим ключа на токене и число нативных диалогов.'
-            : 'Сохранён первый CSR. Проверьте режим ключа на токене.';
+            : 'Сохранён первый CSR. Проверьте режим ключа на токене.');
     });
 });
 

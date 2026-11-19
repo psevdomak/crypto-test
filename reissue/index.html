@@ -22,18 +22,6 @@
     <p>Используйте тестовый токен. Стенд создаёт контейнеры с уникальными именами и может удалить только контейнеры, созданные им в этой вкладке.</p>
     <form id="setup">
         <fieldset>
-            <legend>Контрольные данные токена</legend>
-            <p>Подключите только целевой токен, загрузите считыватели и укажите его режимы и аппаратный серийный номер. Затем можно подключить второй токен для проверки привязки.</p>
-            <button type="button" id="readers">Загрузить считыватели</button>
-            <label>CSP
-                <select id="csp"><option value="">Не задан</option></select>
-            </label>
-            <label>PKCS#11
-                <select id="pkcs11"><option value="">Не задан</option></select>
-            </label>
-            <label>Аппаратный серийный номер <input id="serial" required></label>
-        </fieldset>
-        <fieldset>
             <legend>Параметры прогона</legend>
             <label>Ответ мок API
                 <select id="mock">
@@ -43,8 +31,9 @@
                 </select>
             </label>
             <label>Имя субъекта CSR <input id="subject" value="CN=CryptoPro reissue test" required></label>
-            <p>В нативном диалоге выберите настроенный считыватель. Для проверки смены режима выберите режим, отличный от ответа мока. Отметьте, появился ли второй диалог выбора носителя.</p>
+            <p>Выберите Рутокен в нативном диалоге. Стенд определит серийный номер после первой генерации. Для проверки смены режима выберите режим, отличный от ответа мока, и отметьте, появился ли второй диалог выбора.</p>
             <button type="submit">Сгенерировать</button>
+            <button type="button" id="readers">Показать считыватели</button>
             <button type="button" id="cleanup" disabled>Удалить тестовые контейнеры</button>
         </fieldset>
     </form>

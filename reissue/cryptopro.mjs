@@ -120,13 +120,18 @@ export function cryptoProAdapter(plugin, report) {
             if (!entry.id || before.has(entry.id)) {
                 continue;
             }
+            if (request.keyId) {
+                if (entry.id === request.keyId || (yield entry.object.FQCN) === request.keyId) {
+                    candidates.push(yield* metadata(entry));
+                }
+                continue;
+            }
             const actualName = yield entry.object.Name;
-            const details = yield* metadata(entry);
-            const exactName = [actualName, details.fqcn].some(
+            const fqcn = yield entry.object.FQCN;
+            if ([actualName, fqcn].some(
                 (value) => typeof value === 'string' && value.split('\\').at(-1) === name,
-            );
-            if (exactName && (!request.keyId || [entry.id, details.fqcn].includes(request.keyId))) {
-                candidates.push(details);
+            )) {
+                candidates.push(yield* metadata(entry));
             }
         }
         if (candidates.length !== 1) {
