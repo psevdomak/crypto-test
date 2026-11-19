@@ -59,7 +59,7 @@ for (const format of Object.keys(modes)) {
         assert.deepEqual(changes[0], ['generate', 'reissue-test', 'CN=CryptoPro reissue test', undefined]);
         assert.deepEqual(changes[1], [
             'generate', 'reissue-test-final', 'CN=CryptoPro reissue test',
-            { keyFormat: format, reader: modes[format].reader },
+            { keyFormat: format, ...modes[format] },
         ]);
         assert.deepEqual(changes[3], ['remove', initial.id]);
     });

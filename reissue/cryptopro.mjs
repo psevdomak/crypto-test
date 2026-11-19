@@ -94,20 +94,21 @@ export function cryptoProAdapter(plugin, report) {
         const before = new Set((yield* containers(info)).map(({ id }) => id));
         let request;
         if (target) {
-            const { keyFormat, reader } = target;
+            const { keyFormat, reader, media } = target;
             if (reader.includes('\\')) {
                 throw new Error('Имя считывателя содержит разделитель полного имени контейнера.');
             }
             const type = keyFormat === 'CSP'
                 ? plugin.ENABLE_CARRIER_TYPE_CSP
                 : plugin.ENABLE_CARRIER_TYPE_FKC_NO_SM | plugin.ENABLE_CARRIER_TYPE_FKC_SM;
-            const regex = '^' + reader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$';
+            // ReaderFilter passes the operating-mode pattern to PP_UNIQUE_FILTER.
+            const regex = '^' + media.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$';
             try {
                 const operations = plugin.DISABLE_EVERY_CARRIER_OPERATION;
                 yield about.ReaderFilter(type, operations, regex);
                 // The stand measures whether this full name binds CreateRequest without a second picker.
                 const fullName = ['\\\\.', reader, name].join('\\');
-                request = yield* createRequest(provider, fullName, subject, { type, operations, regex });
+                request = yield* createRequest(provider, fullName, subject, { type, operations, regex, media });
             } finally {
                 yield about.ReaderFilter(plugin.ENABLE_ANY_CARRIER_TYPE, plugin.ENABLE_ANY_OPERATION, '.*');
             }

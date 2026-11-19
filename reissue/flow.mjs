@@ -84,24 +84,24 @@ async function identifyContainer(container, adapter, report) {
 }
 
 function findTarget(readers, token, keyFormat) {
-    const names = new Set();
+    const targets = new Map();
     for (const { reader, media } of readers) {
         const identity = rutokenIdentity(media);
         if (reader && sameToken(identity, token) && identity.keyFormat === keyFormat) {
-            names.add(reader);
+            targets.set(reader, { reader, media });
         }
     }
-    const [name] = names;
-    const sharedName = readers.some(({ reader, media }) => {
-        if (reader !== name) return false;
-        const identity = rutokenIdentity(media);
+    const [target] = targets.values();
+    const sharedName = readers.some((mode) => {
+        if (mode.reader !== target?.reader) return false;
+        const identity = rutokenIdentity(mode.media);
         return identity?.keyFormat === keyFormat && !sameToken(identity, token);
     });
-    if (names.size !== 1 || sharedName) {
+    if (targets.size !== 1 || sharedName) {
         throw new Error('Для Рутокена ' + token.serialNumber + ' считыватель ' + keyFormat
             + ' отсутствует или найден неоднозначно.');
     }
-    return name;
+    return target;
 }
 
 export async function reissue({ adapter, mockFormat, name, report }) {
@@ -132,11 +132,11 @@ export async function reissue({ adapter, mockFormat, name, report }) {
 
     const readers = await adapter.readers();
     report('Режимы считывателей перед повторной генерацией', readers);
-    const reader = findTarget(readers, token, keyFormat);
-    const final = await adapter.generate(name + '-final', subject, { keyFormat, reader });
+    const target = findTarget(readers, token, keyFormat);
+    const final = await adapter.generate(name + '-final', subject, { keyFormat, ...target });
     const finalToken = await identifyContainer(final, adapter, report);
     report('Проверка итогового контейнера', finalToken);
-    if (!sameToken(finalToken, token) || finalToken.keyFormat !== keyFormat || final.reader !== reader) {
+    if (!sameToken(finalToken, token) || finalToken.keyFormat !== keyFormat || final.reader !== target.reader) {
         throw new Error('Итоговый контейнер создан на другом считывателе, токене или в другом формате.');
     }
     if (final.id === initial.id) {
