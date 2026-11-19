@@ -1,22 +1,21 @@
-import { cryptoProAdapter } from './cryptopro.mjs';
-import { reissue } from './flow.mjs';
+import { cryptoProAdapter } from './cryptopro.mjs?v=2';
+import { reissue } from './flow.mjs?v=2';
 
 const element = (id) => document.getElementById(id);
 const form = element('setup');
-const status = element('status');
 const cleanup = element('cleanup');
 const log = element('log');
 let adapter;
 
 function report(message, details) {
-    const entry = message + (details === undefined ? '' : '\n' + JSON.stringify(details, null, 2));
+    const text = typeof details === 'string' ? details : JSON.stringify(details, null, 2);
+    const entry = text === undefined ? message : message + '\n' + text;
     log.prepend(document.createTextNode(entry + '\n\n'));
 }
 
 async function perform(operation) {
     const controls = form.querySelectorAll('fieldset');
     controls.forEach((fieldset) => { fieldset.disabled = true; });
-    status.textContent = 'Выполняется…';
     try {
         if (!adapter) {
             const plugin = window.cadesplugin;
@@ -29,11 +28,9 @@ async function perform(operation) {
                 report('Версии КриптоПро недоступны', error.message || String(error));
             }
         }
-        status.textContent = await operation();
+        await operation();
     } catch (error) {
-        const message = error.message || String(error);
-        report('Ошибка', message);
-        status.textContent = message;
+        report('Ошибка', error.message || String(error));
     } finally {
         cleanup.disabled = !adapter?.owned().length;
         controls.forEach((fieldset) => { fieldset.disabled = false; });
@@ -42,33 +39,27 @@ async function perform(operation) {
 
 element('readers').addEventListener('click', () => perform(async () => {
     const readers = await adapter.readers();
-    report('Режимы считывателей', readers);
-    return 'Режимов считывателей: ' + readers.length;
+    report('Режимы считывателей (' + readers.length + ')', readers);
 }));
 
 form.addEventListener('submit', (event) => {
     event.preventDefault();
-    element('result').hidden = true;
-    element('csr').value = '';
-    perform(async () => {
+    return perform(async () => {
         const mockFormat = element('mock').value;
         const name = 'reissue-' + crypto.randomUUID();
         report('Запуск прогона', { name, mockFormat });
         const result = await reissue({ adapter, mockFormat, name, report });
-        element('csr').value = result.csr;
-        element('result').hidden = false;
         const serial = 'Серийный номер Рутокена: ' + result.serialNumber + '. ';
-        return serial + (result.regenerated
+        const outcome = result.regenerated
             ? 'Итоговый CSR создан, первоначальный контейнер удалён. Сверьте режим ключа и число нативных диалогов.'
-            : 'Сохранён первый CSR. Проверьте режим ключа на токене.');
+            : 'Сохранён первый CSR. Проверьте режим ключа на токене.';
+        report(serial + outcome, 'CSR\n' + result.csr);
     });
 });
 
 cleanup.addEventListener('click', () => perform(async () => {
-    element('result').hidden = true;
-    element('csr').value = '';
     for (const container of adapter.owned()) {
         await adapter.remove(container);
     }
-    return 'Тестовые контейнеры удалены.';
+    report('Тестовые контейнеры удалены.');
 }));
