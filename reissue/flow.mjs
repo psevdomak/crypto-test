@@ -36,13 +36,13 @@ function rutokenIdentity(media) {
     };
 }
 
-function containerIdentity(path) {
+function containerMediaName(path) {
     if (typeof path !== 'string') return undefined;
     const parts = path.split('\\');
     // An FQCN may prefix the unique path with the reader as \\.\Reader.
     const start = path.startsWith('\\\\.\\') ? 4 : 0;
     if (parts[start]?.toUpperCase() !== 'SCARD' || !parts[start + 2]) return undefined;
-    return rutokenIdentity(parts[start + 1]);
+    return parts[start + 1];
 }
 
 function sameToken(first, second) {
@@ -51,8 +51,10 @@ function sameToken(first, second) {
 
 async function identifyContainer(container, adapter, report) {
     const { id, fqcn, reader, media } = container;
-    const fromId = containerIdentity(id);
-    const fromFqcn = containerIdentity(fqcn);
+    const idMedia = containerMediaName(id);
+    const fqcnMedia = containerMediaName(fqcn);
+    const fromId = rutokenIdentity(idMedia);
+    const fromFqcn = rutokenIdentity(fqcnMedia);
     const fromMedia = rutokenIdentity(media);
     const fromPath = fromId ?? fromFqcn;
     if (fromId && fromFqcn && (!sameToken(fromId, fromFqcn) || fromId.keyFormat !== fromFqcn.keyFormat)) {
@@ -66,9 +68,20 @@ async function identifyContainer(container, adapter, report) {
         return { ...(fromPath ?? fromMedia), source };
     }
 
+    const rutoken = (value) => typeof value === 'string' && /rutoken/i.test(value);
+    let hasRutokenEvidence = [idMedia, fqcnMedia, reader, media].some(rutoken);
+    if (!hasRutokenEvidence && (idMedia || fqcnMedia)) return undefined;
+
     report('Поиск серийного номера по считывателю', { uniqueName: id, fqcn, reader, media });
     if (reader) {
-        const modes = await adapter.readers();
+        let modes;
+        try {
+            modes = await adapter.readers();
+        } catch (error) {
+            report('GetReaderModes недоступен', error.message || String(error));
+            if (!hasRutokenEvidence) return undefined;
+            throw error;
+        }
         const matches = modes.filter((mode) => mode.reader === reader || mode.label === reader);
         report('Ответ GetReaderModes', { matches, ...(matches.length ? {} : { available: modes }) });
         const activeModes = matches.filter((mode) => mode.media !== 'NO_MEDIA');
@@ -78,8 +91,10 @@ async function identifyContainer(container, adapter, report) {
             && identity.keyFormat === token.keyFormat)) {
             return { ...token, source: 'Media считывателя' };
         }
+        hasRutokenEvidence ||= matches.some((mode) => [mode.reader, mode.label, mode.media].some(rutoken));
     }
 
+    if (!hasRutokenEvidence) return undefined;
     throw new Error('Не удалось однозначно определить серийный номер Рутокена из 8–10 цифр и режим. См. данные контейнера и считывателей в журнале.');
 }
 
@@ -104,12 +119,7 @@ function findTarget(readers, token, keyFormat) {
     return target;
 }
 
-export async function reissue({ adapter, mockFormat, name, report }) {
-    const initial = await adapter.generate(name, subject);
-    const token = await identifyContainer(initial, adapter, report);
-    const { serialNumber, keyFormat: initialFormat } = token;
-    report('Определён выбранный токен', { ...token, reader: initial.reader });
-
+async function requestKeyFormat(mockFormat, serialNumber, report) {
     const request = new Request('https://mock.invalid' + mockPath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -121,11 +131,33 @@ export async function reissue({ adapter, mockFormat, name, report }) {
         throw new Error('Мок API вернул HTTP ' + response.status);
     }
     const { keyFormat } = await response.json();
-    report('Ответ мок API', { keyFormat, initialFormat });
-
     if (keyFormat !== 'CSP' && keyFormat !== 'PKCS11') {
         throw new Error('Неизвестный формат ключей.');
     }
+    return keyFormat;
+}
+
+export async function reissue({ adapter, mockFormat, name, report }) {
+    const initial = await adapter.generate(name, subject);
+    const token = await identifyContainer(initial, adapter, report);
+    if (!token) {
+        report('Носитель не распознан как Рутокен. Использован первый контейнер.');
+        return { csr: initial.csr, regenerated: false };
+    }
+    const { serialNumber, keyFormat: initialFormat } = token;
+    report('Определён выбранный токен', { ...token, reader: initial.reader });
+
+    let keyFormat;
+    try {
+        keyFormat = await requestKeyFormat(mockFormat, serialNumber, report);
+    } catch (error) {
+        report('Не удалось получить формат от API. Использован выбранный формат.', {
+            keyFormat: initialFormat,
+            error: error.message || String(error),
+        });
+        return { csr: initial.csr, regenerated: false, serialNumber };
+    }
+    report('Ответ мок API', { keyFormat, initialFormat });
     if (keyFormat === initialFormat) {
         return { csr: initial.csr, regenerated: false, serialNumber };
     }

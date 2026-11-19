@@ -80,10 +80,30 @@ test('recognizes a Lite serial in the documented format', async () => {
     assert.equal((await run()).serialNumber, '780287572');
 });
 
-test('mock HTTP failure aborts before removal or regeneration', async () => {
-    const { run, calls } = scenario({ initial: container(modes.PKCS11), desired: 'error' });
-    await assert.rejects(run, /HTTP 503/);
-    assert.equal(calls.filter(([name]) => name === 'generate' || name === 'remove').length, 1);
+test('API failures keep the initial CSR and key in the selected format', async () => {
+    for (const format of Object.keys(modes)) {
+        for (const desired of ['error', 'unsupported']) {
+            const { run, calls } = scenario({ initial: container(modes[format]), desired });
+            assert.deepEqual(await run(), { csr: 'initial-csr', regenerated: false, serialNumber });
+            const changes = calls.filter(([name]) => name === 'generate' || name === 'remove');
+            assert.equal(changes.length, 1);
+            assert.match(calls.at(-1)[1].error, desired === 'error' ? /HTTP 503/ : /Неизвестный формат/);
+            assert.equal(calls.at(-1)[1].keyFormat, format);
+        }
+    }
+});
+
+test('other hardware and software media skip the API and keep the first CSR', async () => {
+    for (const initial of [
+        { id: 'SCARD\\other_vendor_3a5a7554\\key', reader: 'Other Token' },
+        { id: 'HDIMAGE\\key', reader: 'HDIMAGE', media: 'NO_UNIQUE' },
+        { id: 'opaque', reader: 'Other Token' },
+    ]) {
+        const { run, calls } = scenario({ initial, desired: 'PKCS11' });
+        assert.deepEqual(await run(), { csr: 'initial-csr', regenerated: false });
+        assert.equal(calls.filter(([name]) => name === 'generate').length, 1);
+        assert.ok(!calls.some(([name]) => name.startsWith('Мок POST') || name === 'remove'));
+    }
 });
 
 test('removal failure reports the final container was already created', async () => {
@@ -106,8 +126,8 @@ test('missing or ambiguous target aborts before removal', async () => {
     }
 });
 
-test('unknown or out-of-range serial never reaches the mock', async () => {
-    for (const id of ['SCARD\\some_other_device_3a5a7554\\key', 'SCARD\\rutoken_ecp_00000001\\key']) {
+test('a recognizable Rutoken with an unknown serial never reaches the mock', async () => {
+    for (const id of ['SCARD\\rutoken_fkc_unknown\\key', 'SCARD\\rutoken_ecp_00000001\\key']) {
         const { run, calls } = scenario({ initial: { id }, desired: 'CSP' });
         await assert.rejects(run, /Не удалось однозначно определить серийный номер/);
         assert.ok(!calls.some(([name]) => name.startsWith('Мок POST')));
@@ -159,7 +179,8 @@ test('recovers the serial from an unambiguous matching reader only', async () =>
 test('another reader or multiple modes for the selected reader cannot determine the format', async () => {
     for (const readers of [[other], [modes.CSP, { ...modes.PKCS11, reader: modes.CSP.reader }]]) {
         const { run, calls } = scenario({
-            initial: { reader: modes.CSP.reader, id: 'opaque', fqcn: 'opaque-fqcn' }, readers, desired: 'CSP',
+            initial: { reader: modes.CSP.reader, id: 'opaque', media: 'rutoken_ecp', fqcn: 'opaque-fqcn' },
+            readers, desired: 'CSP',
         });
         await assert.rejects(run, /Не удалось однозначно определить/);
         assert.ok(calls.some(([name, details]) => name === 'Ответ GetReaderModes' && 'matches' in details));

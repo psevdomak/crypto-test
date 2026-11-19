@@ -1,5 +1,5 @@
-import { cryptoProAdapter } from './cryptopro.mjs?v=3';
-import { reissue } from './flow.mjs?v=3';
+import { cryptoProAdapter } from './cryptopro.mjs?v=4';
+import { reissue } from './flow.mjs?v=4';
 
 const element = (id) => document.getElementById(id);
 const form = element('setup');
@@ -49,7 +49,7 @@ form.addEventListener('submit', (event) => {
         const name = 'reissue-' + crypto.randomUUID();
         report('Запуск прогона', { name, mockFormat });
         const result = await reissue({ adapter, mockFormat, name, report });
-        const serial = 'Серийный номер Рутокена: ' + result.serialNumber + '. ';
+        const serial = result.serialNumber ? 'Серийный номер Рутокена: ' + result.serialNumber + '. ' : '';
         const outcome = result.regenerated
             ? 'Итоговый CSR создан, первоначальный контейнер удалён. Сверьте режим ключа и число нативных диалогов.'
             : 'Сохранён первый CSR. Проверьте режим ключа на токене.';
