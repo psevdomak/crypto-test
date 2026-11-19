@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Перевыпуск сертификата с мок API</title>
+    <script src="https://cryptopro.ru/sites/default/files/products/cades/cadesplugin_api.js"></script>
+    <script type="module" src="./page.mjs"></script>
+    <style>
+        body { font: 1rem system-ui, sans-serif; max-width: 56rem; margin: 2rem auto; padding: 0 1rem; }
+        fieldset { margin: 1rem 0; padding: 1rem; }
+        label { display: block; margin: .6rem 0; }
+        input, select, button { font: inherit; }
+        select { max-width: 100%; }
+        textarea { display: block; box-sizing: border-box; width: 100%; }
+        pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f2f4f6; padding: .75rem; }
+    </style>
+</head>
+<body>
+    <a href="../">Все тесты</a>
+    <h1>Перевыпуск сертификата</h1>
+    <p>Используйте тестовый токен. Стенд создаёт контейнеры с уникальными именами и может удалить только контейнеры, созданные им в этой вкладке.</p>
+    <form id="setup">
+        <fieldset>
+            <legend>Контрольные данные токена</legend>
+            <p>Подключите только целевой токен, загрузите считыватели и укажите его режимы и аппаратный серийный номер. Затем можно подключить второй токен для проверки привязки.</p>
+            <button type="button" id="readers">Загрузить считыватели</button>
+            <label>CSP
+                <select id="csp"><option value="">Не задан</option></select>
+            </label>
+            <label>PKCS#11
+                <select id="pkcs11"><option value="">Не задан</option></select>
+            </label>
+            <label>Аппаратный серийный номер <input id="serial" required></label>
+        </fieldset>
+        <fieldset>
+            <legend>Параметры прогона</legend>
+            <label>Ответ мок API
+                <select id="mock">
+                    <option value="CSP">CSP</option>
+                    <option value="PKCS11">PKCS11</option>
+                    <option value="error">Ошибка HTTP 503</option>
+                </select>
+            </label>
+            <label>Имя субъекта CSR <input id="subject" value="CN=CryptoPro reissue test" required></label>
+            <p>В нативном диалоге выберите настроенный считыватель. Для проверки смены режима выберите режим, отличный от ответа мока. Отметьте, появился ли второй диалог выбора носителя.</p>
+            <button type="submit">Сгенерировать</button>
+            <button type="button" id="cleanup" disabled>Удалить тестовые контейнеры</button>
+        </fieldset>
+    </form>
+    <p id="status" role="status"></p>
+    <label id="result" hidden>CSR <textarea id="csr" rows="5" readonly></textarea></label>
+    <h2>Журнал</h2>
+    <pre id="log"></pre>
+</body>
+</html>
