@@ -1,4 +1,5 @@
 const mockPath = '/api/v1/company/test/common/key-format';
+const subject = 'CN=CryptoPro reissue test';
 
 function mockKeyFormat(keyFormat) {
     return async (request) => {
@@ -103,7 +104,7 @@ function findTarget(readers, token, keyFormat) {
     return name;
 }
 
-export async function reissue({ adapter, mockFormat, name, subject, report }) {
+export async function reissue({ adapter, mockFormat, name, report }) {
     const initial = await adapter.generate(name, subject);
     const token = await identifyContainer(initial, adapter, report);
     const { serialNumber, keyFormat: initialFormat } = token;
@@ -132,15 +133,21 @@ export async function reissue({ adapter, mockFormat, name, subject, report }) {
     const readers = await adapter.readers();
     report('Режимы считывателей перед повторной генерацией', readers);
     const reader = findTarget(readers, token, keyFormat);
-    await adapter.remove(initial);
-    if (findTarget(await adapter.readers(), token, keyFormat) !== reader) {
-        throw new Error('Целевой считыватель изменился после удаления контейнера.');
-    }
-    const final = await adapter.generate(name, subject, { keyFormat, reader });
+    const final = await adapter.generate(name + '-final', subject, { keyFormat, reader });
     const finalToken = await identifyContainer(final, adapter, report);
     report('Проверка итогового контейнера', finalToken);
     if (!sameToken(finalToken, token) || finalToken.keyFormat !== keyFormat || final.reader !== reader) {
         throw new Error('Итоговый контейнер создан на другом считывателе, токене или в другом формате.');
+    }
+    if (final.id === initial.id) {
+        throw new Error('Итоговый и первоначальный контейнеры имеют одинаковый идентификатор.');
+    }
+
+    try {
+        await adapter.remove(initial);
+    } catch (error) {
+        throw new Error('Итоговый контейнер создан, но удалить первоначальный не удалось. '
+            + (error.message || String(error)), { cause: error });
     }
     return { csr: final.csr, regenerated: true, serialNumber };
 }

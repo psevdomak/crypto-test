@@ -52,16 +52,14 @@ form.addEventListener('submit', (event) => {
     element('csr').value = '';
     perform(async () => {
         const mockFormat = element('mock').value;
-        const subject = element('subject').value.trim();
-        if (!subject) throw new Error('Укажите субъект CSR.');
         const name = 'reissue-' + crypto.randomUUID();
         report('Запуск прогона', { name, mockFormat });
-        const result = await reissue({ adapter, mockFormat, name, subject, report });
+        const result = await reissue({ adapter, mockFormat, name, report });
         element('csr').value = result.csr;
         element('result').hidden = false;
         const serial = 'Серийный номер Рутокена: ' + result.serialNumber + '. ';
         return serial + (result.regenerated
-            ? 'CSR создан повторно. Сверьте режим ключа на токене и число нативных диалогов.'
+            ? 'Итоговый CSR создан, первоначальный контейнер удалён. Сверьте режим ключа и число нативных диалогов.'
             : 'Сохранён первый CSR. Проверьте режим ключа на токене.');
     });
 });

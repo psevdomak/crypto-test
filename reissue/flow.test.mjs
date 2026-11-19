@@ -16,11 +16,12 @@ function container(mode, csr = 'initial-csr') {
     return { ...mode, id: ['SCARD', mode.media, 'native-id'].join('\\'), csr };
 }
 
-function scenario({ initial, desired, finalMode = modes[desired], readers, removeError }) {
+function scenario({ initial, desired, finalMode = modes[desired], readers, generateError, removeError }) {
     const calls = [];
     const adapter = {
         async generate(name, subject, target) {
             calls.push(['generate', name, subject, target]);
+            if (target && generateError) throw generateError;
             return target ? container(finalMode, 'new-csr') : { csr: 'initial-csr', ...initial };
         },
         async readers() {
@@ -32,7 +33,7 @@ function scenario({ initial, desired, finalMode = modes[desired], readers, remov
         },
     };
     const run = () => reissue({
-        adapter, mockFormat: desired, name: 'reissue-test', subject: 'CN=Test',
+        adapter, mockFormat: desired, name: 'reissue-test',
         report(message, value) { calls.push([message, value]); },
     });
     return { run, calls };
@@ -51,10 +52,16 @@ for (const format of Object.keys(modes)) {
         const initial = container(format === 'CSP' ? modes.PKCS11 : modes.CSP);
         const { run, calls } = scenario({ initial, desired: format });
         assert.deepEqual(await run(), { csr: 'new-csr', regenerated: true, serialNumber });
-        assert.deepEqual(calls.filter(([name]) => name === 'remove' || name === 'generate').slice(1), [
-            ['remove', initial.id],
-            ['generate', 'reissue-test', 'CN=Test', { keyFormat: format, reader: modes[format].reader }],
+        const changes = calls.filter(([name]) => ['generate', 'Проверка итогового контейнера', 'remove'].includes(name));
+        assert.deepEqual(changes.map(([name]) => name), [
+            'generate', 'generate', 'Проверка итогового контейнера', 'remove',
         ]);
+        assert.deepEqual(changes[0], ['generate', 'reissue-test', 'CN=CryptoPro reissue test', undefined]);
+        assert.deepEqual(changes[1], [
+            'generate', 'reissue-test-final', 'CN=CryptoPro reissue test',
+            { keyFormat: format, reader: modes[format].reader },
+        ]);
+        assert.deepEqual(changes[3], ['remove', initial.id]);
     });
 }
 
@@ -79,10 +86,11 @@ test('mock HTTP failure aborts before removal or regeneration', async () => {
     assert.equal(calls.filter(([name]) => name === 'generate' || name === 'remove').length, 1);
 });
 
-test('removal failure aborts before regeneration', async () => {
+test('removal failure reports the final container was already created', async () => {
     const initial = container(modes.PKCS11);
     const { run, calls } = scenario({ initial, desired: 'CSP', removeError: new Error('Delete failed') });
-    await assert.rejects(run, /Delete failed/);
+    await assert.rejects(run, /Итоговый контейнер создан.*Delete failed/);
+    assert.equal(calls.at(-2)[0], 'Проверка итогового контейнера');
     assert.deepEqual(calls.at(-1), ['remove', initial.id]);
 });
 
@@ -114,10 +122,19 @@ test('container metadata must agree on the physical token', async () => {
     assert.equal(calls.length, 1);
 });
 
-test('wrong token or format cannot produce a final result', async () => {
+test('failed generation leaves the initial container intact', async () => {
+    const { run, calls } = scenario({
+        initial: container(modes.PKCS11), desired: 'CSP', generateError: new Error('CreateRequest failed'),
+    });
+    await assert.rejects(run, /CreateRequest failed/);
+    assert.ok(!calls.some(([name]) => name === 'remove'));
+});
+
+test('wrong token or format aborts without removing the initial container', async () => {
     for (const finalMode of [{ ...modes.CSP, media: otherMedia }, modes.PKCS11]) {
-        const { run } = scenario({ initial: container(modes.PKCS11), desired: 'CSP', finalMode });
+        const { run, calls } = scenario({ initial: container(modes.PKCS11), desired: 'CSP', finalMode });
         await assert.rejects(run, /Итоговый контейнер создан на другом/);
+        assert.ok(!calls.some(([name]) => name === 'remove'));
     }
 });
 
