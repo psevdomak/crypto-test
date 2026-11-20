@@ -56,7 +56,7 @@ for (const format of Object.keys(modes)) {
         assert.deepEqual(changes.map(([name]) => name), [
             'generate', 'generate', 'Проверка итогового контейнера', 'remove',
         ]);
-        assert.deepEqual(changes[0], ['generate', 'reissue-test', 'CN=CryptoPro reissue test', { readerFormats: ['CSP', 'PKCS11'] }]);
+        assert.deepEqual(changes[0], ['generate', 'reissue-test', 'CN=CryptoPro reissue test', undefined]);
         assert.deepEqual(changes[1], [
             'generate', 'reissue-test-final', 'CN=CryptoPro reissue test',
             { keyFormat: format, ...modes[format] },
@@ -210,7 +210,7 @@ test('a native picker that allows an excluded mode cannot produce a result', asy
     for (const readerFormats of [[], ['CSP', 'PKCS11']]) {
         const { run, calls } = scenario({ initial, desired: 'CSP', readerFormats });
         await assert.rejects(run, /КриптоПро создал контейнер в режиме FKS/);
-        assert.deepEqual(calls[0][3], { readerFormats: ['CSP', 'PKCS11'] });
+        assert.deepEqual(calls[0][3], readerFormats.length ? { readerFormats } : undefined);
         assert.equal(calls.filter(([name]) => name === 'generate').length, 1);
         assert.ok(!calls.some(([name]) => name.startsWith('Мок POST') || name === 'remove'));
     }
