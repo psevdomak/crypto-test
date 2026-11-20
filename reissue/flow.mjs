@@ -138,8 +138,11 @@ async function requestKeyFormat(mockFormat, serialNumber, report) {
 }
 
 export async function reissue({ adapter, mockFormat, name, readerFormats = [], report }) {
-    const initialOptions = readerFormats.length ? { readerFormats } : undefined;
-    const initial = await adapter.generate(name, subject, initialOptions);
+    const formats = readerFormats.length ? readerFormats : ['CSP', 'PKCS11'];
+    if (formats.some((format) => format !== 'CSP' && format !== 'PKCS11')) {
+        throw new Error('ReaderFilter поддерживает только CSP и PKCS#11.');
+    }
+    const initial = await adapter.generate(name, subject, { readerFormats: formats });
     const token = await identifyContainer(initial, adapter, report);
     if (!token) {
         report('Носитель не распознан как Рутокен. Использован первый контейнер.');
@@ -147,9 +150,9 @@ export async function reissue({ adapter, mockFormat, name, readerFormats = [], r
     }
     const { serialNumber, keyFormat: initialFormat } = token;
     report('Определён выбранный токен', { ...token, reader: initial.reader });
-    if (readerFormats.length && !readerFormats.includes(initialFormat)) {
+    if (!formats.includes(initialFormat)) {
         throw new Error('КриптоПро создал контейнер в режиме ' + initialFormat
-            + '. Разрешённые режимы первой генерации: ' + readerFormats.join(', ') + '.');
+            + '. Разрешённые режимы первой генерации: ' + formats.join(', ') + '.');
     }
 
     let keyFormat;

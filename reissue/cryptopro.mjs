@@ -96,7 +96,7 @@ export function cryptoProAdapter(plugin, report) {
 
     function readerFormat({ media, flags }) {
         if (/^pkcs11_/i.test(media)) return 'PKCS11';
-        if (/^rutoken_fkc_/i.test(media) || (flags & plugin.CARRIER_FLAG_SECURE_MESSAGING)) return 'FKS';
+        if (/^rutoken_(fkc|crypt)_/i.test(media) || (flags & plugin.CARRIER_FLAG_SECURE_MESSAGING)) return undefined;
         if (Number.isInteger(flags) && !(flags & plugin.CARRIER_FLAG_FUNCTIONAL_CARRIER)) return 'CSP';
         return undefined;
     }
@@ -105,10 +105,9 @@ export function cryptoProAdapter(plugin, report) {
         const types = {
             CSP: plugin.ENABLE_CARRIER_TYPE_CSP,
             PKCS11: plugin.ENABLE_CARRIER_TYPE_FKC_NO_SM,
-            FKS: plugin.ENABLE_CARRIER_TYPE_FKC_SM,
         };
         const type = formats.reduce((mask, format) => mask | types[format], 0);
-        if (formats.length === 1 && !formats.includes('PKCS11')) {
+        if (formats.length === 1 && formats[0] === 'CSP') {
             return { type, regex: '.*', formats };
         }
 
@@ -135,7 +134,7 @@ export function cryptoProAdapter(plugin, report) {
             }
             const type = keyFormat === 'CSP'
                 ? plugin.ENABLE_CARRIER_TYPE_CSP
-                : plugin.ENABLE_CARRIER_TYPE_FKC_NO_SM | plugin.ENABLE_CARRIER_TYPE_FKC_SM;
+                : plugin.ENABLE_CARRIER_TYPE_FKC_NO_SM;
             // ReaderFilter passes the operating-mode pattern to PP_UNIQUE_FILTER.
             filter = { type, regex: '^' + escapePattern(media) + '$', media };
             container = ['\\\\.', reader, name].join('\\');

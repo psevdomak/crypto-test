@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Перевыпуск сертификата с мок API</title>
     <script src="https://cryptopro.ru/sites/default/files/products/cades/cadesplugin_api.js"></script>
-    <script type="module" src="./page.mjs?v=6"></script>
+    <script type="module" src="./page.mjs?v=7"></script>
     <style>
         body { font: 1rem system-ui, sans-serif; max-width: 56rem; margin: 2rem auto; padding: 0 1rem; }
         fieldset { margin: 1rem 0; padding: 1rem; }
@@ -23,12 +23,11 @@
         <fieldset>
             <legend>Параметры прогона</legend>
             <label for="reader-formats">ReaderFilter для первой генерации</label>
-            <select id="reader-formats" multiple size="3" aria-describedby="reader-formats-hint">
-                <option value="CSP">CSP</option>
-                <option value="PKCS11">PKCS#11</option>
-                <option value="FKS">FKS (ФКН с защитой канала)</option>
+            <select id="reader-formats" multiple size="2" aria-describedby="reader-formats-hint">
+                <option value="CSP" selected>CSP</option>
+                <option value="PKCS11" selected>PKCS#11</option>
             </select>
-            <p id="reader-formats-hint">Для выбора нескольких режимов используйте Ctrl или ⌘. Пустой выбор оставляет все режимы доступными.</p>
+            <p id="reader-formats-hint">Для выбора нескольких режимов используйте Ctrl или ⌘. При пустом выборе используются CSP и PKCS#11.</p>
             <label>Ответ мок API
                 <select id="mock">
                     <option value="CSP">CSP</option>
