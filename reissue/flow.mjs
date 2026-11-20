@@ -147,6 +147,10 @@ export async function reissue({ adapter, mockFormat, name, readerFormats = [], r
     }
     const { serialNumber, keyFormat: initialFormat } = token;
     report('Определён выбранный токен', { ...token, reader: initial.reader });
+    if (readerFormats.length && !readerFormats.includes(initialFormat)) {
+        throw new Error('КриптоПро создал контейнер в режиме ' + initialFormat
+            + '. Разрешённые режимы первой генерации: ' + readerFormats.join(', ') + '.');
+    }
 
     let keyFormat;
     try {

@@ -206,3 +206,11 @@ test('format lookup failure keeps the chosen FKS key', async () => {
     assert.deepEqual(await run(), { csr: 'initial-csr', regenerated: false, serialNumber });
     assert.equal(calls.at(-1)[1].keyFormat, 'FKS');
 });
+
+test('a native picker that allows an excluded mode cannot produce a result', async () => {
+    const initial = container({ reader: 'A FKS', media: 'rutoken_fkc_3a5a7554' });
+    const { run, calls } = scenario({ initial, desired: 'CSP', readerFormats: ['CSP', 'PKCS11'] });
+    await assert.rejects(run, /КриптоПро создал контейнер в режиме FKS/);
+    assert.equal(calls.filter(([name]) => name === 'generate').length, 1);
+    assert.ok(!calls.some(([name]) => name.startsWith('Мок POST') || name === 'remove'));
+});

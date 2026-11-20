@@ -104,7 +104,7 @@ export function cryptoProAdapter(plugin, report) {
     function* initialFilter(context, formats) {
         const types = {
             CSP: plugin.ENABLE_CARRIER_TYPE_CSP,
-            PKCS11: plugin.ENABLE_CARRIER_TYPE_FKC_NO_SM | plugin.ENABLE_CARRIER_TYPE_FKC_SM,
+            PKCS11: plugin.ENABLE_CARRIER_TYPE_FKC_NO_SM,
             FKS: plugin.ENABLE_CARRIER_TYPE_FKC_SM,
         };
         const type = formats.reduce((mask, format) => mask | types[format], 0);
