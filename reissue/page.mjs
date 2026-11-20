@@ -6,10 +6,6 @@ const form = element('setup');
 const cleanup = element('cleanup');
 const log = element('log');
 const readerFilter = element('reader-formats');
-const windowsModeField = element('windows-mode-field');
-const windowsMode = element('windows-mode');
-const isWindows = /^win/i.test(navigator.userAgentData?.platform || navigator.platform)
-    || /\bWindows NT\b/i.test(navigator.userAgent);
 let adapter;
 
 function report(message, details) {
@@ -19,8 +15,8 @@ function report(message, details) {
 }
 
 async function perform(operation) {
-    const controls = form.querySelectorAll('fieldset');
-    controls.forEach((fieldset) => { fieldset.disabled = true; });
+    const controls = form.querySelectorAll('fieldset, button[type="submit"]');
+    controls.forEach((control) => { control.disabled = true; });
     try {
         if (!adapter) {
             const plugin = window.cadesplugin;
@@ -38,20 +34,9 @@ async function perform(operation) {
         report('Ошибка', error.message || String(error));
     } finally {
         cleanup.disabled = !adapter?.owned().length;
-        controls.forEach((fieldset) => { fieldset.disabled = false; });
+        controls.forEach((control) => { control.disabled = false; });
     }
 }
-
-function updateWindowsMode() {
-    const required = isWindows && readerFilter.selectedOptions.length > 1;
-    windowsModeField.hidden = !required;
-    windowsMode.disabled = !required;
-    windowsMode.required = required;
-    if (!required) windowsMode.value = '';
-}
-
-readerFilter.addEventListener('change', updateWindowsMode);
-updateWindowsMode();
 
 element('readers').addEventListener('click', () => perform(async () => {
     const readers = await adapter.readers();
@@ -60,11 +45,7 @@ element('readers').addEventListener('click', () => perform(async () => {
 
 form.addEventListener('submit', (event) => {
     event.preventDefault();
-    updateWindowsMode();
-    if (!windowsMode.reportValidity()) return;
-
-    const selectedFormats = Array.from(readerFilter.selectedOptions, (option) => option.value);
-    const readerFormats = windowsMode.required ? [windowsMode.value] : selectedFormats;
+    const readerFormats = Array.from(readerFilter.selectedOptions, (option) => option.value);
     return perform(async () => {
         const mockFormat = element('mock').value;
         const name = 'reissue-' + crypto.randomUUID();
