@@ -16,7 +16,7 @@ function container(mode, csr = 'initial-csr') {
     return { ...mode, id: ['SCARD', mode.media, 'native-id'].join('\\'), csr };
 }
 
-function scenario({ initial, desired, finalMode = modes[desired], readers, readerFormats, generateError, removeError }) {
+function scenario({ initial, desired, finalMode = modes[desired], readers, readerFormats, isWindows, generateError, removeError }) {
     const calls = [];
     const adapter = {
         async generate(name, subject, target) {
@@ -33,7 +33,7 @@ function scenario({ initial, desired, finalMode = modes[desired], readers, reade
         },
     };
     const run = () => reissue({
-        adapter, mockFormat: desired, name: 'reissue-test', readerFormats,
+        adapter, mockFormat: desired, name: 'reissue-test', readerFormats, isWindows,
         report(message, value) { calls.push([message, value]); },
     });
     return { run, calls };
@@ -56,7 +56,7 @@ for (const format of Object.keys(modes)) {
         assert.deepEqual(changes.map(([name]) => name), [
             'generate', 'generate', 'Проверка итогового контейнера', 'remove',
         ]);
-        assert.deepEqual(changes[0], ['generate', 'reissue-test', 'CN=CryptoPro reissue test', undefined]);
+        assert.deepEqual(changes[0], ['generate', 'reissue-test', 'CN=CryptoPro reissue test', { readerFormats: ['CSP', 'PKCS11'] }]);
         assert.deepEqual(changes[1], [
             'generate', 'reissue-test-final', 'CN=CryptoPro reissue test',
             { keyFormat: format, ...modes[format] },
@@ -210,8 +210,29 @@ test('a native picker that allows an excluded mode cannot produce a result', asy
     for (const readerFormats of [[], ['CSP', 'PKCS11']]) {
         const { run, calls } = scenario({ initial, desired: 'CSP', readerFormats });
         await assert.rejects(run, /КриптоПро создал контейнер в режиме FKS/);
-        assert.deepEqual(calls[0][3], readerFormats.length ? { readerFormats } : undefined);
+        assert.deepEqual(calls[0][3], { readerFormats: ['CSP', 'PKCS11'] });
         assert.equal(calls.filter(([name]) => name === 'generate').length, 1);
         assert.ok(!calls.some(([name]) => name.startsWith('Мок POST') || name === 'remove'));
     }
+});
+
+test('Windows uses CSP for the first generation when the user selected zero or two modes', async () => {
+    for (const readerFormats of [[], ['CSP', 'PKCS11']]) {
+        const { run, calls } = scenario({
+            initial: container(modes.CSP), desired: 'PKCS11', readerFormats, isWindows: true,
+        });
+        assert.deepEqual(await run(), { csr: 'new-csr', regenerated: true, serialNumber });
+        const generations = calls.filter(([name]) => name === 'generate');
+        assert.deepEqual(generations[0][3], { readerFormats: ['CSP'] });
+        assert.deepEqual(generations[1][3], { keyFormat: 'PKCS11', ...modes.PKCS11 });
+    }
+});
+
+test('Windows honors a single selected filter', async () => {
+    const readerFormats = ['PKCS11'];
+    const { run, calls } = scenario({
+        initial: container(modes.PKCS11), desired: 'PKCS11', readerFormats, isWindows: true,
+    });
+    assert.equal((await run()).csr, 'initial-csr');
+    assert.deepEqual(calls[0][3], { readerFormats });
 });
