@@ -127,7 +127,7 @@ export function cryptoProAdapter(plugin, report) {
         const before = new Set((yield* containers(info)).map(({ id }) => id));
         let container = name;
         let filter;
-        const { keyFormat, reader, media, readerFormats = [] } = options;
+        const { keyFormat, reader, media, readerFormats = [], smartCardsOnly = false } = options;
         if (reader) {
             if (reader.includes('\\')) {
                 throw new Error('Имя считывателя содержит разделитель полного имени контейнера.');
@@ -145,11 +145,22 @@ export function cryptoProAdapter(plugin, report) {
         let request;
         if (filter) {
             const operations = plugin.DISABLE_EVERY_CARRIER_OPERATION;
+            let mediaType;
             try {
+                if (smartCardsOnly) {
+                    yield about.MediaFilter(plugin.MEDIA_TYPE_SCARD);
+                    mediaType = plugin.MEDIA_TYPE_SCARD;
+                }
                 yield about.ReaderFilter(filter.type, operations, filter.regex);
-                request = yield* createRequest(provider, container, subject, { ...filter, operations });
+                request = yield* createRequest(provider, container, subject, { ...filter, operations, mediaType });
             } finally {
-                yield about.ReaderFilter(plugin.ENABLE_ANY_CARRIER_TYPE, plugin.ENABLE_ANY_OPERATION, '.*');
+                try {
+                    yield about.ReaderFilter(plugin.ENABLE_ANY_CARRIER_TYPE, plugin.ENABLE_ANY_OPERATION, '.*');
+                } finally {
+                    if (mediaType !== undefined) {
+                        yield about.MediaFilter(plugin.MEDIA_TYPE_DEFAULT);
+                    }
+                }
             }
         } else {
             request = yield* createRequest(provider, container, subject, null);
