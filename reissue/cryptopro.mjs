@@ -90,11 +90,46 @@ export function cryptoProAdapter(plugin, report) {
         return { csr, keyId };
     }
 
-    function* generate({ about, provider, info }, name, subject, target) {
+    function escapePattern(value) {
+        return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    function readerFormat({ media, flags }) {
+        if (/^pkcs11_/i.test(media)) return 'PKCS11';
+        if (/^rutoken_fkc_/i.test(media) || (flags & plugin.CARRIER_FLAG_SECURE_MESSAGING)) return 'FKS';
+        if (Number.isInteger(flags) && !(flags & plugin.CARRIER_FLAG_FUNCTIONAL_CARRIER)) return 'CSP';
+        return undefined;
+    }
+
+    function* initialFilter(context, formats) {
+        const types = {
+            CSP: plugin.ENABLE_CARRIER_TYPE_CSP,
+            PKCS11: plugin.ENABLE_CARRIER_TYPE_FKC_NO_SM | plugin.ENABLE_CARRIER_TYPE_FKC_SM,
+            FKS: plugin.ENABLE_CARRIER_TYPE_FKC_SM,
+        };
+        const type = formats.reduce((mask, format) => mask | types[format], 0);
+        if (formats.length === 1 && !formats.includes('PKCS11')) {
+            return { type, regex: '.*', formats };
+        }
+
+        const modes = yield* readers(context);
+        const media = [...new Set(modes
+            .filter((mode) => mode.media && mode.media !== 'NO_MEDIA' && formats.includes(readerFormat(mode)))
+            .map((mode) => mode.media))];
+        if (!media.length) {
+            report('Доступные режимы считывателей', modes);
+            throw new Error('Среди подключённых носителей нет выбранных режимов ReaderFilter.');
+        }
+        return { type, regex: '^(' + media.map(escapePattern).join('|') + ')$', formats, media };
+    }
+
+    function* generate(context, name, subject, options = {}) {
+        const { about, provider, info } = context;
         const before = new Set((yield* containers(info)).map(({ id }) => id));
-        let request;
-        if (target) {
-            const { keyFormat, reader, media } = target;
+        let container = name;
+        let filter;
+        const { keyFormat, reader, media, readerFormats = [] } = options;
+        if (reader) {
             if (reader.includes('\\')) {
                 throw new Error('Имя считывателя содержит разделитель полного имени контейнера.');
             }
@@ -102,18 +137,23 @@ export function cryptoProAdapter(plugin, report) {
                 ? plugin.ENABLE_CARRIER_TYPE_CSP
                 : plugin.ENABLE_CARRIER_TYPE_FKC_NO_SM | plugin.ENABLE_CARRIER_TYPE_FKC_SM;
             // ReaderFilter passes the operating-mode pattern to PP_UNIQUE_FILTER.
-            const regex = '^' + media.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$';
+            filter = { type, regex: '^' + escapePattern(media) + '$', media };
+            container = ['\\\\.', reader, name].join('\\');
+        } else if (readerFormats.length) {
+            filter = yield* initialFilter(context, readerFormats);
+        }
+
+        let request;
+        if (filter) {
+            const operations = plugin.DISABLE_EVERY_CARRIER_OPERATION;
             try {
-                const operations = plugin.DISABLE_EVERY_CARRIER_OPERATION;
-                yield about.ReaderFilter(type, operations, regex);
-                // The stand measures whether this full name binds CreateRequest without a second picker.
-                const fullName = ['\\\\.', reader, name].join('\\');
-                request = yield* createRequest(provider, fullName, subject, { type, operations, regex, media });
+                yield about.ReaderFilter(filter.type, operations, filter.regex);
+                request = yield* createRequest(provider, container, subject, { ...filter, operations });
             } finally {
                 yield about.ReaderFilter(plugin.ENABLE_ANY_CARRIER_TYPE, plugin.ENABLE_ANY_OPERATION, '.*');
             }
         } else {
-            request = yield* createRequest(provider, name, subject, null);
+            request = yield* createRequest(provider, container, subject, null);
         }
 
         const candidates = [];

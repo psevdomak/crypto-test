@@ -16,13 +16,13 @@ function container(mode, csr = 'initial-csr') {
     return { ...mode, id: ['SCARD', mode.media, 'native-id'].join('\\'), csr };
 }
 
-function scenario({ initial, desired, finalMode = modes[desired], readers, generateError, removeError }) {
+function scenario({ initial, desired, finalMode = modes[desired], readers, readerFormats, generateError, removeError }) {
     const calls = [];
     const adapter = {
         async generate(name, subject, target) {
             calls.push(['generate', name, subject, target]);
-            if (target && generateError) throw generateError;
-            return target ? container(finalMode, 'new-csr') : { csr: 'initial-csr', ...initial };
+            if (target?.keyFormat && generateError) throw generateError;
+            return target?.keyFormat ? container(finalMode, 'new-csr') : { csr: 'initial-csr', ...initial };
         },
         async readers() {
             return readers || Object.values(modes).concat(other);
@@ -33,7 +33,7 @@ function scenario({ initial, desired, finalMode = modes[desired], readers, gener
         },
     };
     const run = () => reissue({
-        adapter, mockFormat: desired, name: 'reissue-test',
+        adapter, mockFormat: desired, name: 'reissue-test', readerFormats,
         report(message, value) { calls.push([message, value]); },
     });
     return { run, calls };
@@ -186,4 +186,23 @@ test('another reader or multiple modes for the selected reader cannot determine 
         assert.ok(calls.some(([name, details]) => name === 'Ответ GetReaderModes' && 'matches' in details));
         assert.ok(!calls.some(([name]) => name.startsWith('Мок POST') || name === 'remove'));
     }
+});
+
+test('the selected modes restrict the first generation but the API controls the final format', async () => {
+    const fks = { reader: 'A FKS', media: 'rutoken_fkc_3a5a7554' };
+    const initial = container(fks);
+    const readerFormats = ['PKCS11', 'FKS'];
+    const { run, calls } = scenario({ initial, desired: 'CSP', readerFormats });
+    assert.deepEqual(await run(), { csr: 'new-csr', regenerated: true, serialNumber });
+    assert.deepEqual(calls.filter(([name]) => name === 'generate'), [
+        ['generate', 'reissue-test', 'CN=CryptoPro reissue test', { readerFormats }],
+        ['generate', 'reissue-test-final', 'CN=CryptoPro reissue test', { keyFormat: 'CSP', ...modes.CSP }],
+    ]);
+});
+
+test('format lookup failure keeps the chosen FKS key', async () => {
+    const initial = container({ reader: 'A FKS', media: 'rutoken_fkc_3a5a7554' });
+    const { run, calls } = scenario({ initial, desired: 'error', readerFormats: ['FKS'] });
+    assert.deepEqual(await run(), { csr: 'initial-csr', regenerated: false, serialNumber });
+    assert.equal(calls.at(-1)[1].keyFormat, 'FKS');
 });

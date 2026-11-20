@@ -22,7 +22,7 @@ function mockKeyFormat(keyFormat) {
 // https://cryptopro.ru/forum2/default.aspx?g=posts&t=11386
 function rutokenIdentity(media) {
     if (typeof media !== 'string') return undefined;
-    const match = /^(rutoken_ecp|pkcs11_rutoken_ecp|rutoken_lt)_([\da-f]{8})$/i.exec(media);
+    const match = /^(rutoken_ecp|pkcs11_rutoken_ecp|rutoken_lt|rutoken_fkc)_([\da-f]{8})$/i.exec(media);
     if (!match) return undefined;
 
     const prefix = match[1].toLowerCase();
@@ -32,7 +32,7 @@ function rutokenIdentity(media) {
     return {
         serialNumber,
         family: prefix === 'rutoken_lt' ? 'Lite' : 'ECP',
-        keyFormat: prefix === 'pkcs11_rutoken_ecp' ? 'PKCS11' : 'CSP',
+        keyFormat: { pkcs11_rutoken_ecp: 'PKCS11', rutoken_fkc: 'FKS' }[prefix] ?? 'CSP',
     };
 }
 
@@ -137,8 +137,9 @@ async function requestKeyFormat(mockFormat, serialNumber, report) {
     return keyFormat;
 }
 
-export async function reissue({ adapter, mockFormat, name, report }) {
-    const initial = await adapter.generate(name, subject);
+export async function reissue({ adapter, mockFormat, name, readerFormats = [], report }) {
+    const initialOptions = readerFormats.length ? { readerFormats } : undefined;
+    const initial = await adapter.generate(name, subject, initialOptions);
     const token = await identifyContainer(initial, adapter, report);
     if (!token) {
         report('Носитель не распознан как Рутокен. Использован первый контейнер.');
