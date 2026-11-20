@@ -5,6 +5,11 @@ const element = (id) => document.getElementById(id);
 const form = element('setup');
 const cleanup = element('cleanup');
 const log = element('log');
+const readerFilter = element('reader-formats');
+const windowsModeField = element('windows-mode-field');
+const windowsMode = element('windows-mode');
+const isWindows = /^win/i.test(navigator.userAgentData?.platform || navigator.platform)
+    || /\bWindows NT\b/i.test(navigator.userAgent);
 let adapter;
 
 function report(message, details) {
@@ -37,6 +42,17 @@ async function perform(operation) {
     }
 }
 
+function updateWindowsMode() {
+    const required = isWindows && readerFilter.selectedOptions.length > 1;
+    windowsModeField.hidden = !required;
+    windowsMode.disabled = !required;
+    windowsMode.required = required;
+    if (!required) windowsMode.value = '';
+}
+
+readerFilter.addEventListener('change', updateWindowsMode);
+updateWindowsMode();
+
 element('readers').addEventListener('click', () => perform(async () => {
     const readers = await adapter.readers();
     report('Режимы считывателей (' + readers.length + ')', readers);
@@ -44,9 +60,13 @@ element('readers').addEventListener('click', () => perform(async () => {
 
 form.addEventListener('submit', (event) => {
     event.preventDefault();
+    updateWindowsMode();
+    if (!windowsMode.reportValidity()) return;
+
+    const selectedFormats = Array.from(readerFilter.selectedOptions, (option) => option.value);
+    const readerFormats = windowsMode.required ? [windowsMode.value] : selectedFormats;
     return perform(async () => {
         const mockFormat = element('mock').value;
-        const readerFormats = Array.from(element('reader-formats').selectedOptions, (option) => option.value);
         const name = 'reissue-' + crypto.randomUUID();
         report('Запуск прогона', { name, mockFormat, readerFormats });
         const result = await reissue({ adapter, mockFormat, name, readerFormats, report });

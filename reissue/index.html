@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Перевыпуск сертификата с мок API</title>
     <script src="https://cryptopro.ru/sites/default/files/products/cades/cadesplugin_api.js"></script>
-    <script type="module" src="./page.mjs?v=8"></script>
+    <script type="module" src="./page.mjs?v=9"></script>
     <style>
         body { font: 1rem system-ui, sans-serif; max-width: 56rem; margin: 2rem auto; padding: 0 1rem; }
         fieldset { margin: 1rem 0; padding: 1rem; }
@@ -28,6 +28,15 @@
                 <option value="PKCS11">PKCS#11</option>
             </select>
             <p id="reader-formats-hint">Для выбора нескольких режимов используйте Ctrl или ⌘. При пустом выборе первая генерация проходит без ReaderFilter.</p>
+            <div id="windows-mode-field" hidden>
+                <label for="windows-mode">Режим первой генерации на Windows</label>
+                <select id="windows-mode" aria-describedby="windows-mode-hint" disabled>
+                    <option value="">Выберите режим</option>
+                    <option value="CSP">CSP</option>
+                    <option value="PKCS11">PKCS#11</option>
+                </select>
+                <p id="windows-mode-hint">При нескольких фильтрах Windows может показать лишние режимы. Стенд передаст КриптоПро выбранный здесь режим.</p>
+            </div>
             <label>Ответ мок API
                 <select id="mock">
                     <option value="CSP">CSP</option>
@@ -35,7 +44,7 @@
                     <option value="error">Ошибка HTTP 503</option>
                 </select>
             </label>
-            <p>Смена формата и мок API работают только для Рутокена. Чтобы проверить смену формата, выберите в нативном диалоге режим, отличный от ответа мока. При ошибке API стенд сохранит ключ в выбранном режиме.</p>
+            <p>Смена формата и мок API работают только для Рутокена. Чтобы проверить смену формата, задайте для первой генерации режим, отличный от ответа мока. При ошибке API стенд сохранит ключ в выбранном режиме.</p>
             <button type="submit">Сгенерировать</button>
             <button type="button" id="readers">Показать считыватели</button>
             <button type="button" id="cleanup" disabled>Удалить тестовые контейнеры</button>
