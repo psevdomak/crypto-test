@@ -39,13 +39,24 @@ export function cryptoProAdapter(plugin, report) {
         return entries;
     }
 
-    function* containers(info) {
-        const collection = yield info.EnumContainers();
-        const count = yield collection.Count;
+    function* call(stage, operation) {
+        try {
+            return yield operation();
+        } catch (error) {
+            throw new Error(stage + ': ' + (error?.message || String(error)), { cause: error });
+        }
+    }
+
+    function* containers(info, phase) {
+        const stage = 'Перечисление контейнеров (' + phase + ')';
+        const collection = yield* call(stage + ': EnumContainers', () => info.EnumContainers());
+        const count = yield* call(stage + ': Count', () => collection.Count);
         const entries = [];
         for (let i = 0; i < count; i++) {
-            const object = yield collection.ItemByIndex(i);
-            entries.push({ object, id: yield object.UniqueName });
+            const entry = stage + ', элемент ' + (i + 1) + ' из ' + count;
+            const object = yield* call(entry + ': ItemByIndex', () => collection.ItemByIndex(i));
+            const id = yield* call(entry + ': UniqueName', () => object.UniqueName);
+            entries.push({ object, id });
         }
         return entries;
     }
@@ -64,7 +75,7 @@ export function cryptoProAdapter(plugin, report) {
         yield key.propset_Existing(false);
 
         const request = yield plugin.CreateObjectAsync('X509Enrollment.CX509CertificateRequestPkcs10');
-        yield request.InitializeFromPrivateKey(1, key, '');
+        yield* call('InitializeFromPrivateKey', () => request.InitializeFromPrivateKey(1, key, ''));
         const name = yield plugin.CreateObjectAsync('X509Enrollment.CX500DistinguishedName');
         yield name.Encode(subject);
         yield request.propset_Subject(name);
@@ -77,9 +88,10 @@ export function cryptoProAdapter(plugin, report) {
         yield extensions.Add(identification);
 
         const enrollment = yield plugin.CreateObjectAsync('X509Enrollment.CX509Enrollment');
-        yield enrollment.InitializeFromRequest(request);
+        yield* call('InitializeFromRequest', () => enrollment.InitializeFromRequest(request));
         report('Вызов CreateRequest', { container, filter });
-        const csr = yield enrollment.CreateRequest(plugin.XCN_CRYPT_STRING_BASE64);
+        const csr = yield* call('CreateRequest', () => enrollment.CreateRequest(plugin.XCN_CRYPT_STRING_BASE64));
+        report('CreateRequest вернул CSR', { container });
 
         let keyId;
         try {
@@ -124,7 +136,7 @@ export function cryptoProAdapter(plugin, report) {
 
     function* generate(context, name, subject, options = {}) {
         const { about, provider, info } = context;
-        const before = new Set((yield* containers(info)).map(({ id }) => id));
+        const before = new Set((yield* containers(info, 'до генерации')).map(({ id }) => id));
         let container = name;
         let filter;
         const { keyFormat, reader, media, readerFormats = [], smartCardsOnly = false } = options;
@@ -146,28 +158,42 @@ export function cryptoProAdapter(plugin, report) {
         if (filter) {
             const operations = plugin.DISABLE_EVERY_CARRIER_OPERATION;
             let mediaType;
+            let generationFailed = false;
             try {
                 if (smartCardsOnly) {
-                    yield about.MediaFilter(plugin.MEDIA_TYPE_SCARD);
                     mediaType = plugin.MEDIA_TYPE_SCARD;
+                    yield* call('MediaFilter: смарт-карты', () => about.MediaFilter(mediaType));
                 }
-                yield about.ReaderFilter(filter.type, operations, filter.regex);
+                yield* call('ReaderFilter: установка', () => about.ReaderFilter(filter.type, operations, filter.regex));
                 request = yield* createRequest(provider, container, subject, { ...filter, operations, mediaType });
+            } catch (error) {
+                generationFailed = true;
+                throw error;
             } finally {
+                let resetError;
                 try {
-                    yield about.ReaderFilter(plugin.ENABLE_ANY_CARRIER_TYPE, plugin.ENABLE_ANY_OPERATION, '.*');
-                } finally {
-                    if (mediaType !== undefined) {
-                        yield about.MediaFilter(plugin.MEDIA_TYPE_DEFAULT);
+                    yield* call('ReaderFilter: сброс', () =>
+                        about.ReaderFilter(plugin.ENABLE_ANY_CARRIER_TYPE, plugin.ENABLE_ANY_OPERATION, '.*'));
+                } catch (error) {
+                    resetError = error;
+                    report('Сбой сброса ReaderFilter', error.message);
+                }
+                if (mediaType !== undefined) {
+                    try {
+                        yield* call('MediaFilter: сброс', () => about.MediaFilter(plugin.MEDIA_TYPE_DEFAULT));
+                    } catch (error) {
+                        resetError ??= error;
+                        report('Сбой сброса MediaFilter', error.message);
                     }
                 }
+                if (!generationFailed && resetError) throw resetError;
             }
         } else {
             request = yield* createRequest(provider, container, subject, null);
         }
 
         const candidates = [];
-        for (const entry of yield* containers(info)) {
+        for (const entry of yield* containers(info, 'после генерации')) {
             if (!entry.id || before.has(entry.id)) {
                 continue;
             }
@@ -196,7 +222,7 @@ export function cryptoProAdapter(plugin, report) {
     }
 
     function* remove({ info }, expected) {
-        const matches = (yield* containers(info)).filter(({ id }) => id === expected.id);
+        const matches = (yield* containers(info, 'перед удалением')).filter(({ id }) => id === expected.id);
         if (matches.length !== 1) {
             throw new Error('Контейнер для удаления отсутствует или найден неоднозначно.');
         }
@@ -206,7 +232,7 @@ export function cryptoProAdapter(plugin, report) {
         }
         yield matches[0].object.propset_Silent(true);
         yield matches[0].object.Delete();
-        if ((yield* containers(info)).some(({ id }) => id === expected.id)) {
+        if ((yield* containers(info, 'после удаления')).some(({ id }) => id === expected.id)) {
             throw new Error('КриптоПро всё ещё видит контейнер после удаления.');
         }
         owned.delete(expected.id);
