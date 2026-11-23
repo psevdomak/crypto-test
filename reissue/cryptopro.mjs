@@ -136,20 +136,28 @@ export function cryptoProAdapter(plugin, report) {
 
         let request;
         let generationFailed = false;
+        const mediaType = plugin.MEDIA_TYPE_SCARD;
+        const resets = [['MediaFilter', () => about.MediaFilter(plugin.MEDIA_TYPE_DEFAULT)]];
         try {
+            yield* call('MediaFilter: смарт-карты', () => about.MediaFilter(mediaType));
+            resets.unshift(['ReaderFilter', () =>
+                about.ReaderFilter(plugin.ENABLE_ANY_CARRIER_TYPE, plugin.ENABLE_ANY_OPERATION, '.*')]);
             yield* call('ReaderFilter: установка', () => about.ReaderFilter(filter.type, filter.operations, filter.regex));
-            request = yield* createRequest(provider, container, subject, filter);
+            request = yield* createRequest(provider, container, subject, { ...filter, mediaType });
         } catch (error) {
             generationFailed = true;
             throw error;
         } finally {
-            try {
-                yield* call('ReaderFilter: сброс', () =>
-                    about.ReaderFilter(plugin.ENABLE_ANY_CARRIER_TYPE, plugin.ENABLE_ANY_OPERATION, '.*'));
-            } catch (error) {
-                report('Сбой сброса ReaderFilter', error.message);
-                if (!generationFailed) throw error;
+            let resetError;
+            for (const [name, reset] of resets) {
+                try {
+                    yield* call(name + ': сброс', reset);
+                } catch (error) {
+                    resetError ??= error;
+                    report('Сбой сброса ' + name, error.message);
+                }
             }
+            if (!generationFailed && resetError) throw resetError;
         }
 
         const candidates = [];
