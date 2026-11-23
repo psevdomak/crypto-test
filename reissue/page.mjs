@@ -1,4 +1,4 @@
-import { cryptoProAdapter } from './cryptopro.mjs?v=13';
+import { cryptoProAdapter } from './cryptopro.mjs?v=14';
 import { reissue } from './flow.mjs?v=12';
 
 const element = (id) => document.getElementById(id);
