@@ -179,7 +179,20 @@ export async function reissue({ adapter, mockFormat, name, readerFormats = [], i
     const readers = await adapter.readers();
     report('Режимы считывателей перед повторной генерацией', readers);
     const target = findTarget(readers, token, keyFormat);
-    const final = await adapter.generate(name + '-final', subject, { keyFormat, ...target });
+    let final;
+    try {
+        final = await adapter.generate(name + '-final', subject, { keyFormat, ...target });
+    } catch (generationError) {
+        try {
+            await adapter.remove(initial);
+        } catch (cleanupError) {
+            report('Не удалось удалить временный контейнер после сбоя второй генерации', {
+                id: initial.id,
+                error: cleanupError?.message || String(cleanupError),
+            });
+        }
+        throw generationError;
+    }
     const finalToken = await identifyContainer(final, adapter, report);
     report('Проверка итогового контейнера', finalToken);
     if (!sameToken(finalToken, token) || finalToken.keyFormat !== keyFormat || final.reader !== target.reader) {

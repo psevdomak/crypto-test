@@ -47,23 +47,9 @@ export function cryptoProAdapter(plugin, report) {
         }
     }
 
-    function hasErrorCode(error, codes) {
-        const message = error?.message || String(error);
-        const fromMessage = message.match(/0x([0-9a-f]{8})/i);
-        const code = fromMessage ? Number.parseInt(fromMessage[1], 16) : Number(error?.number ?? error?.code);
-        return codes.includes(code >>> 0);
-    }
-
     function* containers(info, phase) {
         const stage = 'Перечисление контейнеров (' + phase + ')';
-        let collection;
-        try {
-            collection = yield* call(stage + ': EnumContainers', () => info.EnumContainers());
-        } catch (error) {
-            if (!hasErrorCode(error.cause ?? error, [0x80070103])) throw error;
-            report('EnumContainers недоступен. Используется точечный поиск.', { phase, error: error.message });
-            return null;
-        }
+        const collection = yield* call(stage + ': EnumContainers', () => info.EnumContainers());
         const count = yield* call(stage + ': Count', () => collection.Count);
         const entries = [];
         for (let i = 0; i < count; i++) {
@@ -77,24 +63,6 @@ export function cryptoProAdapter(plugin, report) {
 
     function* metadata({ object, id }) {
         return { id, fqcn: yield object.FQCN, reader: yield object.Reader, media: yield object.Media };
-    }
-
-    function* containerById(info, keyId) {
-        let object;
-        try {
-            object = yield* call('ContainerByName', () => info.ContainerByName(keyId));
-        } catch (error) {
-            const notFound = [0x80070002, 0x80090016, 0x80092004];
-            if (hasErrorCode(error.cause ?? error, notFound)) return null;
-            throw error;
-        }
-        if (object == null) return null;
-        const id = yield* call('ContainerByName: UniqueName', () => object.UniqueName);
-        const fqcn = yield* call('ContainerByName: FQCN', () => object.FQCN);
-        if (!id || (id !== keyId && fqcn !== keyId)) {
-            throw new Error('ContainerByName вернул контейнер с другим идентификатором.');
-        }
-        return { object, id, fqcn };
     }
 
     function* createRequest(provider, container, subject, filter) {
@@ -123,6 +91,7 @@ export function cryptoProAdapter(plugin, report) {
         yield* call('InitializeFromRequest', () => enrollment.InitializeFromRequest(request));
         report('Вызов CreateRequest', { container, filter });
         const csr = yield* call('CreateRequest', () => enrollment.CreateRequest(plugin.XCN_CRYPT_STRING_BASE64));
+        if (!csr) throw new Error('CreateRequest не вернул CSR.');
         report('CreateRequest вернул CSR', { container });
 
         let keyId;
@@ -168,8 +137,7 @@ export function cryptoProAdapter(plugin, report) {
 
     function* generate(context, name, subject, options = {}) {
         const { about, provider, info } = context;
-        const existing = yield* containers(info, 'до генерации');
-        const before = new Set(existing?.map(({ id }) => id));
+        const before = new Set((yield* containers(info, 'до генерации')).map(({ id }) => id));
         let container = name;
         let filter;
         const { keyFormat, reader, media, readerFormats = [], smartCardsOnly = false } = options;
@@ -225,36 +193,8 @@ export function cryptoProAdapter(plugin, report) {
             request = yield* createRequest(provider, container, subject, null);
         }
 
-        const after = existing && (yield* containers(info, 'после генерации'));
-        let created;
-        if (after) {
-            created = yield* findNewContainer(after, before, request, name);
-        } else {
-            if (!request.keyId) {
-                throw new Error('Для точечного поиска не удалось получить UniqueContainerName созданного ключа.');
-            }
-            const entry = yield* containerById(info, request.keyId);
-            if (!entry || before.has(entry.id) || owned.has(entry.id)) {
-                throw new Error('ContainerByName не подтвердил создание нового контейнера.');
-            }
-            const actualName = yield* call('ContainerByName: Name', () => entry.object.Name);
-            if (!matchesContainerName(name, actualName, entry.fqcn)) {
-                throw new Error('Имя найденного контейнера отличается от имени текущего прогона.');
-            }
-            created = yield* metadata(entry);
-        }
-        owned.set(created.id, created);
-        report('Создан контейнер', created);
-        return { ...created, csr: request.csr };
-    }
-
-    function matchesContainerName(name, ...values) {
-        return values.some((value) => typeof value === 'string' && value.split('\\').at(-1) === name);
-    }
-
-    function* findNewContainer(entries, before, request, name) {
         const candidates = [];
-        for (const entry of entries) {
+        for (const entry of yield* containers(info, 'после генерации')) {
             if (!entry.id || before.has(entry.id)) {
                 continue;
             }
@@ -266,7 +206,9 @@ export function cryptoProAdapter(plugin, report) {
             }
             const actualName = yield entry.object.Name;
             const fqcn = yield entry.object.FQCN;
-            if (matchesContainerName(name, actualName, fqcn)) {
+            if ([actualName, fqcn].some(
+                (value) => typeof value === 'string' && value.split('\\').at(-1) === name,
+            )) {
                 candidates.push(yield* metadata(entry));
             }
         }
@@ -274,25 +216,24 @@ export function cryptoProAdapter(plugin, report) {
             report('Идентификация контейнера', { name, keyId: request.keyId, candidates });
             throw new Error('Новый контейнер не определён однозначно. Автоматическое удаление недоступно.');
         }
-        return candidates[0];
+        const created = candidates[0];
+        owned.set(created.id, created);
+        report('Создан контейнер', created);
+        return { ...created, csr: request.csr };
     }
 
     function* remove({ info }, expected) {
-        const entries = yield* containers(info, 'перед удалением');
-        const matches = entries?.filter(({ id }) => id === expected.id);
-        const target = matches ? (matches.length === 1 ? matches[0] : null) : yield* containerById(info, expected.id);
-        if (!target || target.id !== expected.id) {
+        const matches = (yield* containers(info, 'перед удалением')).filter(({ id }) => id === expected.id);
+        if (matches.length !== 1) {
             throw new Error('Контейнер для удаления отсутствует или найден неоднозначно.');
         }
-        const current = yield* metadata(target);
+        const current = yield* metadata(matches[0]);
         if (!['fqcn', 'reader', 'media'].every((field) => current[field] && current[field] === expected[field])) {
             throw new Error('Метаданные контейнера перед удалением изменились или недоступны.');
         }
-        yield target.object.propset_Silent(true);
-        yield target.object.Delete();
-        const after = entries && (yield* containers(info, 'после удаления'));
-        const remains = after ? after.some(({ id }) => id === expected.id) : yield* containerById(info, expected.id);
-        if (remains) {
+        yield matches[0].object.propset_Silent(true);
+        yield matches[0].object.Delete();
+        if ((yield* containers(info, 'после удаления')).some(({ id }) => id === expected.id)) {
             throw new Error('КриптоПро всё ещё видит контейнер после удаления.');
         }
         owned.delete(expected.id);

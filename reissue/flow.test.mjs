@@ -142,12 +142,28 @@ test('container metadata must agree on the physical token', async () => {
     assert.equal(calls.length, 1);
 });
 
-test('failed generation leaves the initial container intact', async () => {
+test('second-generation errors and cancellation remove only the temporary container', async () => {
+    const initial = container(modes.PKCS11);
+    for (const message of ['CreateRequest failed', 'Отмена пользователем (0x8010006E)']) {
+        const generateError = new Error(message);
+        const { run, calls } = scenario({ initial, desired: 'CSP', generateError });
+        await assert.rejects(run, (error) => error === generateError);
+        assert.deepEqual(calls.filter(([name]) => name === 'remove'), [['remove', initial.id]]);
+    }
+});
+
+test('a cleanup failure is logged without replacing the second-generation error', async () => {
+    const initial = container(modes.PKCS11);
+    const generateError = new Error('CreateRequest failed');
     const { run, calls } = scenario({
-        initial: container(modes.PKCS11), desired: 'CSP', generateError: new Error('CreateRequest failed'),
+        initial, desired: 'CSP', generateError, removeError: new Error('Delete failed'),
     });
-    await assert.rejects(run, /CreateRequest failed/);
-    assert.ok(!calls.some(([name]) => name === 'remove'));
+    await assert.rejects(run, (error) => error === generateError);
+    assert.deepEqual(calls.at(-2), ['remove', initial.id]);
+    assert.deepEqual(calls.at(-1), [
+        'Не удалось удалить временный контейнер после сбоя второй генерации',
+        { id: initial.id, error: 'Delete failed' },
+    ]);
 });
 
 test('wrong token or format aborts without removing the initial container', async () => {
