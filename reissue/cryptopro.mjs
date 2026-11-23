@@ -107,40 +107,16 @@ export function cryptoProAdapter(plugin, report) {
         return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
-    function readerFormat({ media, flags }) {
-        if (/^pkcs11_/i.test(media)) return 'PKCS11';
-        if (/^rutoken_(fkc|crypt)_/i.test(media) || (flags & plugin.CARRIER_FLAG_SECURE_MESSAGING)) return undefined;
-        if (Number.isInteger(flags) && !(flags & plugin.CARRIER_FLAG_FUNCTIONAL_CARRIER)) return 'CSP';
-        return undefined;
-    }
-
-    function* initialFilter(context, formats) {
-        const types = {
-            CSP: plugin.ENABLE_CARRIER_TYPE_CSP,
-            PKCS11: plugin.ENABLE_CARRIER_TYPE_FKC_NO_SM,
-        };
-        const type = formats.reduce((mask, format) => mask | types[format], 0);
-        if (formats.length === 1 && formats[0] === 'CSP') {
-            return { type, regex: '.*', formats };
-        }
-
-        const modes = yield* readers(context);
-        const media = [...new Set(modes
-            .filter((mode) => mode.media && mode.media !== 'NO_MEDIA' && formats.includes(readerFormat(mode)))
-            .map((mode) => mode.media))];
-        if (!media.length) {
-            report('Доступные режимы считывателей', modes);
-            throw new Error('Среди подключённых носителей нет выбранных режимов ReaderFilter.');
-        }
-        return { type, regex: '^(' + media.map(escapePattern).join('|') + ')$', formats, media };
-    }
-
     function* generate(context, name, subject, options = {}) {
         const { about, provider, info } = context;
         const before = new Set((yield* containers(info, 'до генерации')).map(({ id }) => id));
         let container = name;
-        let filter;
-        const { keyFormat, reader, media, readerFormats = [] } = options;
+        let filter = {
+            type: plugin.ENABLE_CARRIER_TYPE_FKC_NO_SM | plugin.ENABLE_CARRIER_TYPE_FKC_SM,
+            operations: plugin.ENABLE_ANY_OPERATION,
+            regex: '.*(pkcs11).*',
+        };
+        const { keyFormat, reader, media } = options;
         if (reader) {
             if (reader.includes('\\')) {
                 throw new Error('Имя считывателя содержит разделитель полного имени контейнера.');
@@ -149,33 +125,31 @@ export function cryptoProAdapter(plugin, report) {
                 ? plugin.ENABLE_CARRIER_TYPE_CSP
                 : plugin.ENABLE_CARRIER_TYPE_FKC_NO_SM;
             // ReaderFilter passes the operating-mode pattern to PP_UNIQUE_FILTER.
-            filter = { type, regex: '^' + escapePattern(media) + '$', media };
+            filter = {
+                type,
+                operations: plugin.DISABLE_EVERY_CARRIER_OPERATION,
+                regex: '^' + escapePattern(media) + '$',
+                media,
+            };
             container = ['\\\\.', reader, name].join('\\');
-        } else if (readerFormats.length) {
-            filter = yield* initialFilter(context, readerFormats);
         }
 
         let request;
-        if (filter) {
-            const operations = plugin.DISABLE_EVERY_CARRIER_OPERATION;
-            let generationFailed = false;
+        let generationFailed = false;
+        try {
+            yield* call('ReaderFilter: установка', () => about.ReaderFilter(filter.type, filter.operations, filter.regex));
+            request = yield* createRequest(provider, container, subject, filter);
+        } catch (error) {
+            generationFailed = true;
+            throw error;
+        } finally {
             try {
-                yield* call('ReaderFilter: установка', () => about.ReaderFilter(filter.type, operations, filter.regex));
-                request = yield* createRequest(provider, container, subject, { ...filter, operations });
+                yield* call('ReaderFilter: сброс', () =>
+                    about.ReaderFilter(plugin.ENABLE_ANY_CARRIER_TYPE, plugin.ENABLE_ANY_OPERATION, '.*'));
             } catch (error) {
-                generationFailed = true;
-                throw error;
-            } finally {
-                try {
-                    yield* call('ReaderFilter: сброс', () =>
-                        about.ReaderFilter(plugin.ENABLE_ANY_CARRIER_TYPE, plugin.ENABLE_ANY_OPERATION, '.*'));
-                } catch (error) {
-                    report('Сбой сброса ReaderFilter', error.message);
-                    if (!generationFailed) throw error;
-                }
+                report('Сбой сброса ReaderFilter', error.message);
+                if (!generationFailed) throw error;
             }
-        } else {
-            request = yield* createRequest(provider, container, subject, null);
         }
 
         const candidates = [];

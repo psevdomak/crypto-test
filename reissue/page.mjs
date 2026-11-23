@@ -1,13 +1,10 @@
-import { cryptoProAdapter } from './cryptopro.mjs?v=16';
-import { reissue } from './flow.mjs?v=16';
+import { cryptoProAdapter } from './cryptopro.mjs?v=17';
+import { reissue } from './flow.mjs?v=17';
 
 const element = (id) => document.getElementById(id);
 const form = element('setup');
 const cleanup = element('cleanup');
 const log = element('log');
-const readerFilter = element('reader-formats');
-const isWindows = /^win/i.test(navigator.userAgentData?.platform || navigator.platform)
-    || /\bWindows NT\b/i.test(navigator.userAgent);
 let adapter;
 
 function report(message, details) {
@@ -47,12 +44,11 @@ element('readers').addEventListener('click', () => perform(async () => {
 
 form.addEventListener('submit', (event) => {
     event.preventDefault();
-    const readerFormats = Array.from(readerFilter.selectedOptions, (option) => option.value);
     return perform(async () => {
         const mockFormat = element('mock').value;
         const name = 'reissue-' + crypto.randomUUID();
-        report('Запуск прогона', { name, mockFormat, readerFormats });
-        const result = await reissue({ adapter, mockFormat, name, readerFormats, isWindows, report });
+        report('Запуск прогона', { name, mockFormat });
+        const result = await reissue({ adapter, mockFormat, name, report });
         const serial = result.serialNumber ? 'Серийный номер Рутокена: ' + result.serialNumber + '. ' : '';
         const outcome = result.regenerated
             ? 'Итоговый CSR создан, первоначальный контейнер удалён. Сверьте режим ключа и число нативных диалогов.'

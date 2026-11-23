@@ -137,17 +137,8 @@ async function requestKeyFormat(mockFormat, serialNumber, report) {
     return keyFormat;
 }
 
-export async function reissue({ adapter, mockFormat, name, readerFormats = [], isWindows = false, report }) {
-    if (readerFormats.some((format) => format !== 'CSP' && format !== 'PKCS11')) {
-        throw new Error('ReaderFilter поддерживает только CSP и PKCS#11.');
-    }
-    let allowedFormats = readerFormats.length ? readerFormats : ['CSP', 'PKCS11'];
-    if (isWindows && allowedFormats.length > 1) {
-        // The Windows picker exposed FKC whenever both modes were passed together.
-        allowedFormats = ['CSP'];
-        report('Первая генерация на Windows использует фильтр CSP.');
-    }
-    const initial = await adapter.generate(name, subject, { readerFormats: allowedFormats });
+export async function reissue({ adapter, mockFormat, name, report }) {
+    const initial = await adapter.generate(name, subject);
     const token = await identifyContainer(initial, adapter, report);
     if (!token) {
         report('Носитель не распознан как Рутокен. Использован первый контейнер.');
@@ -155,9 +146,9 @@ export async function reissue({ adapter, mockFormat, name, readerFormats = [], i
     }
     const { serialNumber, keyFormat: initialFormat } = token;
     report('Определён выбранный токен', { ...token, reader: initial.reader });
-    if (!allowedFormats.includes(initialFormat)) {
+    if (initialFormat !== 'CSP' && initialFormat !== 'PKCS11') {
         throw new Error('КриптоПро создал контейнер в режиме ' + initialFormat
-            + '. Разрешённые режимы первой генерации: ' + allowedFormats.join(', ') + '.');
+            + '. Для перевыпуска подходят CSP и PKCS11.');
     }
 
     let keyFormat;
