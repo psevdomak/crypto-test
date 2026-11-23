@@ -242,17 +242,18 @@ test('Windows uses CSP by default and preserves the API choice for the final gen
     assert.deepEqual(generations[1][3], { keyFormat: 'PKCS11', ...modes.PKCS11 });
 });
 
-test('Windows passes both explicitly selected modes with the smart-card filter', async () => {
+test('Windows uses just CSP when both modes were selected, then switches if the API requests it', async () => {
     const readerFormats = ['CSP', 'PKCS11'];
     const { run, calls } = scenario({
-        initial: container(modes.PKCS11), desired: 'PKCS11', readerFormats, isWindows: true,
+        initial: container(modes.CSP), desired: 'PKCS11', readerFormats, isWindows: true,
     });
-    assert.equal((await run()).csr, 'initial-csr');
-    const generation = calls.find(([name]) => name === 'generate');
-    assert.deepEqual(generation[3], { readerFormats, smartCardsOnly: true });
+    assert.deepEqual(await run(), { csr: 'new-csr', regenerated: true, serialNumber });
+    const generations = calls.filter(([name]) => name === 'generate');
+    assert.deepEqual(generations[0][3], { readerFormats: ['CSP'] });
+    assert.deepEqual(generations[1][3], { keyFormat: 'PKCS11', ...modes.PKCS11 });
 });
 
-test('the Windows smart-card filter still rejects FKS if the native picker allows it', async () => {
+test('the Windows single-mode filter still rejects FKS if the native picker allows it', async () => {
     const initial = container({ reader: 'A FKS', media: 'rutoken_fkc_3a5a7554' });
     const { run, calls } = scenario({ initial, desired: 'CSP', readerFormats: ['CSP', 'PKCS11'], isWindows: true });
     await assert.rejects(run, /КриптоПро создал контейнер в режиме FKS/);

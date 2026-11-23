@@ -1,5 +1,5 @@
-import { cryptoProAdapter } from './cryptopro.mjs?v=15';
-import { reissue } from './flow.mjs?v=15';
+import { cryptoProAdapter } from './cryptopro.mjs?v=16';
+import { reissue } from './flow.mjs?v=16';
 
 const element = (id) => document.getElementById(id);
 const form = element('setup');

@@ -140,7 +140,7 @@ export function cryptoProAdapter(plugin, report) {
         const before = new Set((yield* containers(info, 'до генерации')).map(({ id }) => id));
         let container = name;
         let filter;
-        const { keyFormat, reader, media, readerFormats = [], smartCardsOnly = false } = options;
+        const { keyFormat, reader, media, readerFormats = [] } = options;
         if (reader) {
             if (reader.includes('\\')) {
                 throw new Error('Имя считывателя содержит разделитель полного имени контейнера.');
@@ -158,36 +158,21 @@ export function cryptoProAdapter(plugin, report) {
         let request;
         if (filter) {
             const operations = plugin.DISABLE_EVERY_CARRIER_OPERATION;
-            let mediaType;
             let generationFailed = false;
             try {
-                if (smartCardsOnly) {
-                    mediaType = plugin.MEDIA_TYPE_SCARD;
-                    yield* call('MediaFilter: смарт-карты', () => about.MediaFilter(mediaType));
-                }
                 yield* call('ReaderFilter: установка', () => about.ReaderFilter(filter.type, operations, filter.regex));
-                request = yield* createRequest(provider, container, subject, { ...filter, operations, mediaType });
+                request = yield* createRequest(provider, container, subject, { ...filter, operations });
             } catch (error) {
                 generationFailed = true;
                 throw error;
             } finally {
-                let resetError;
                 try {
                     yield* call('ReaderFilter: сброс', () =>
                         about.ReaderFilter(plugin.ENABLE_ANY_CARRIER_TYPE, plugin.ENABLE_ANY_OPERATION, '.*'));
                 } catch (error) {
-                    resetError = error;
                     report('Сбой сброса ReaderFilter', error.message);
+                    if (!generationFailed) throw error;
                 }
-                if (mediaType !== undefined) {
-                    try {
-                        yield* call('MediaFilter: сброс', () => about.MediaFilter(plugin.MEDIA_TYPE_DEFAULT));
-                    } catch (error) {
-                        resetError ??= error;
-                        report('Сбой сброса MediaFilter', error.message);
-                    }
-                }
-                if (!generationFailed && resetError) throw resetError;
             }
         } else {
             request = yield* createRequest(provider, container, subject, null);

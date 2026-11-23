@@ -141,14 +141,13 @@ export async function reissue({ adapter, mockFormat, name, readerFormats = [], i
     if (readerFormats.some((format) => format !== 'CSP' && format !== 'PKCS11')) {
         throw new Error('ReaderFilter поддерживает только CSP и PKCS#11.');
     }
-    const defaults = isWindows ? ['CSP'] : ['CSP', 'PKCS11'];
-    const allowedFormats = readerFormats.length ? readerFormats : defaults;
-    const initialOptions = { readerFormats: allowedFormats };
+    let allowedFormats = readerFormats.length ? readerFormats : ['CSP', 'PKCS11'];
     if (isWindows && allowedFormats.length > 1) {
-        initialOptions.smartCardsOnly = true;
-        report('Фильтрация CSP и PKCS#11 на Windows применяется к смарт-картам.');
+        // The Windows picker exposed FKC whenever both modes were passed together.
+        allowedFormats = ['CSP'];
+        report('Первая генерация на Windows использует фильтр CSP.');
     }
-    const initial = await adapter.generate(name, subject, initialOptions);
+    const initial = await adapter.generate(name, subject, { readerFormats: allowedFormats });
     const token = await identifyContainer(initial, adapter, report);
     if (!token) {
         report('Носитель не распознан как Рутокен. Использован первый контейнер.');
