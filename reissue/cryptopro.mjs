@@ -1,12 +1,35 @@
+import {KeyFormat} from './key-format.mjs';
+
+// Значения совпадают с create-certificate-request-on-token.ts в sme-qds-ui.
+const ENABLE_CARRIER_TYPE_CSP = 0x01;
+const ENABLE_CARRIER_TYPE_PKCS11 = 0x02;
+const ENABLE_ANY_CARRIER_TYPE = 0x07;
+const ENABLE_ANY_OPERATION = 0x03;
+const DISABLE_EVERY_CARRIER_OPERATION = 0x00;
+const MEDIA_TYPE_DEFAULT = 0x00000000;
+
+const NO_MEDIA_FLAG = 'NO_MEDIA';
+const NO_UNIQUE_FLAG = 'NO_UNIQUE';
+const CRYPTO_PROVIDER_TYPE = 80;
+
+const escapePattern = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Адаптер КриптоПро для стенда. Повторяет поведение sme-qds-ui:
+ * - `readers` — как get-reader-modes.ts;
+ * - `generate` — как create-certificate-request-on-token.ts;
+ * - `remove` — как delete-container-by-unique-name.ts.
+ */
 export function cryptoProAdapter(plugin, report) {
-    const owned = new Map();
+    // Только для кнопки очистки стенда: сама логика удаления — по id, как в приложении.
+    const owned = new Set();
 
     function run(operation) {
         return new Promise((resolve, reject) => {
             plugin.async_spawn(function* () {
                 try {
                     const about = yield plugin.CreateObjectAsync('CAdESCOM.About');
-                    const provider = yield about.CSPName(80);
+                    const provider = yield about.CSPName(CRYPTO_PROVIDER_TYPE);
                     const info = yield plugin.CreateObjectAsync('X509Enrollment.CCspInformation');
                     yield info.InitializeFromName(provider);
                     resolve(yield* operation({ about, provider, info }));
@@ -19,8 +42,12 @@ export function cryptoProAdapter(plugin, report) {
 
     function* versions({ about, provider }) {
         const pluginVersion = yield about.PluginVersion;
-        const cspVersion = yield about.CSPVersion(provider, 80);
-        return { plugin: yield pluginVersion.toString(), csp: yield cspVersion.toString(), provider };
+        const cspVersion = yield about.CSPVersion(provider, CRYPTO_PROVIDER_TYPE);
+        return {
+            plugin: yield pluginVersion.toString(),
+            csp: yield cspVersion.toString(),
+            provider,
+        };
     }
 
     function* readers({ info }) {
@@ -29,195 +56,208 @@ export function cryptoProAdapter(plugin, report) {
         const entries = [];
         for (let i = 0; i < count; i++) {
             const mode = yield modes.ItemByIndex(i);
+            entries.push({ reader: yield mode.Name, media: yield mode.Media });
+        }
+        return entries;
+    }
+
+    function* containers({ info }) {
+        const collection = yield info.EnumContainers();
+        const count = yield collection.Count;
+        const entries = [];
+        for (let i = 0; i < count; i++) {
+            const object = yield collection.ItemByIndex(i);
             entries.push({
-                reader: yield mode.Name,
-                media: yield mode.Media,
-                label: yield mode.NickName,
-                flags: yield mode.CarrierFlags,
+                object,
+                fqcn: yield object.FQCN,
+                uniqueName: yield object.UniqueName,
             });
         }
         return entries;
     }
 
-    function* call(stage, operation) {
+    /** Имя считывателя контейнера — аналог getContainerMetaInfo(containerId).tokenName. */
+    function* containerReader(info, containerId, containerName) {
+        if (!containerId.trim()) {
+            // Пустое имя не найдётся в перечислении контейнеров.
+            report('getContainerMetaInfo', 'Empty uniqueContainerName', {
+                uniqueContainerName: containerId,
+            });
+            return undefined;
+        }
+
         try {
-            return yield operation();
+            const matches = (yield* containers({ info })).filter(
+                ({ fqcn, uniqueName }) =>
+                    fqcn === containerId || uniqueName === containerId,
+            );
+            if (matches.length === 1) return yield matches[0].object.Reader;
+            report('getContainerMetaInfo', 'Контейнер не найден однозначно', {
+                containerName,
+                containerId,
+                matches: matches.length,
+            });
         } catch (error) {
-            throw new Error(stage + ': ' + (error?.message || String(error)), { cause: error });
+            report('getContainerMetaInfo', error?.message || String(error), {
+                containerName,
+                containerId,
+            });
         }
+
+        return undefined;
     }
 
-    function* containers(info, phase) {
-        const stage = 'Перечисление контейнеров (' + phase + ')';
-        const collection = yield* call(stage + ': EnumContainers', () => info.EnumContainers());
-        const count = yield* call(stage + ': Count', () => collection.Count);
-        const entries = [];
-        for (let i = 0; i < count; i++) {
-            const entry = stage + ', элемент ' + (i + 1) + ' из ' + count;
-            const object = yield* call(entry + ': ItemByIndex', () => collection.ItemByIndex(i));
-            const id = yield* call(entry + ': UniqueName', () => object.UniqueName);
-            entries.push({ object, id });
-        }
-        return entries;
-    }
-
-    function* metadata({ object, id }) {
-        return { id, fqcn: yield object.FQCN, reader: yield object.Reader, media: yield object.Media };
-    }
-
-    function* createRequest(provider, container, subject, filter) {
+    function* createRequest(provider, containerName, subject) {
         const key = yield plugin.CreateObjectAsync('X509Enrollment.CX509PrivateKey');
         yield key.propset_ProviderName(provider);
-        yield key.propset_ContainerName(container);
-        yield key.propset_ProviderType(80);
+        yield key.propset_ContainerName(containerName);
+        yield key.propset_Existing(false);
+        yield key.propset_ProviderType(CRYPTO_PROVIDER_TYPE);
         yield key.propset_ExportPolicy(0);
         yield key.propset_KeySpec(1);
-        yield key.propset_Existing(false);
 
-        const request = yield plugin.CreateObjectAsync('X509Enrollment.CX509CertificateRequestPkcs10');
-        yield* call('InitializeFromPrivateKey', () => request.InitializeFromPrivateKey(1, key, ''));
+        const request = yield plugin.CreateObjectAsync(
+            'X509Enrollment.CX509CertificateRequestPkcs10',
+        );
+        yield request.InitializeFromPrivateKey(1, key, '');
         const name = yield plugin.CreateObjectAsync('X509Enrollment.CX500DistinguishedName');
         yield name.Encode(subject);
         yield request.propset_Subject(name);
         const usage = yield plugin.CreateObjectAsync('X509Enrollment.CX509ExtensionKeyUsage');
         yield usage.InitializeEncode(32 | 16 | 128 | 64 | 8);
-        const identification = yield plugin.CreateObjectAsync('X509Enrollment.CX509ExtensionIdentificationKind');
+        const identification = yield plugin.CreateObjectAsync(
+            'X509Enrollment.CX509ExtensionIdentificationKind',
+        );
         yield identification.InitializeEncode(0);
         const extensions = yield request.X509Extensions;
         yield extensions.Add(usage);
         yield extensions.Add(identification);
 
         const enrollment = yield plugin.CreateObjectAsync('X509Enrollment.CX509Enrollment');
-        yield* call('InitializeFromRequest', () => enrollment.InitializeFromRequest(request));
-        report('Вызов CreateRequest', { container, filter });
-        const csr = yield* call('CreateRequest', () => enrollment.CreateRequest(plugin.XCN_CRYPT_STRING_BASE64));
-        if (!csr) throw new Error('CreateRequest не вернул CSR.');
-        report('CreateRequest вернул CSR', { container });
+        yield enrollment.InitializeFromRequest(request);
+        const csr = yield enrollment.CreateRequest(plugin.XCN_CRYPT_STRING_BASE64);
 
-        let keyId;
+        // Закрытый ключ создаётся здесь, поэтому имя контейнера читаем после запроса.
+        let containerId = '';
         try {
-            keyId = yield key.UniqueContainerName;
+            containerId = yield key.UniqueContainerName;
         } catch (error) {
-            report('UniqueContainerName недоступно', error.message || String(error));
+            report('createCertificateRequestOnToken:uniqueContainerName', error?.message || String(error), {
+                containerName,
+            });
         }
-        return { csr, keyId };
+
+        return { csr, containerId };
     }
 
-    function escapePattern(value) {
-        return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    }
-
-    function* generate(context, name, subject, options = {}) {
+    function* generate(context, name, subject, target) {
         const { about, provider, info } = context;
-        const before = new Set((yield* containers(info, 'до генерации')).map(({ id }) => id));
-        let container = name;
-        let filter = {
-            type: plugin.ENABLE_CARRIER_TYPE_FKC_NO_SM | plugin.ENABLE_CARRIER_TYPE_FKC_SM,
-            operations: plugin.ENABLE_ANY_OPERATION,
-            regex: '.*(pkcs11).*',
-        };
-        const { keyFormat, reader, media } = options;
-        if (reader) {
-            if (reader.includes('\\')) {
-                throw new Error('Имя считывателя содержит разделитель полного имени контейнера.');
-            }
-            const type = keyFormat === 'CSP'
-                ? plugin.ENABLE_CARRIER_TYPE_CSP
-                : plugin.ENABLE_CARRIER_TYPE_FKC_NO_SM;
-            // ReaderFilter passes the operating-mode pattern to PP_UNIQUE_FILTER.
-            filter = {
-                type,
-                operations: plugin.DISABLE_EVERY_CARRIER_OPERATION,
-                regex: '^' + escapePattern(media) + '$',
-                media,
-            };
-            container = ['\\\\.', reader, name].join('\\');
-        }
+        let filterApplied = false;
+        let csr;
+        let containerId = '';
 
-        let request;
-        let generationFailed = false;
-        const mediaType = plugin.MEDIA_TYPE_SCARD;
-        const resets = [['MediaFilter', () => about.MediaFilter(plugin.MEDIA_TYPE_DEFAULT)]];
         try {
-            yield* call('MediaFilter: смарт-карты', () => about.MediaFilter(mediaType));
-            resets.unshift(['ReaderFilter', () =>
-                about.ReaderFilter(plugin.ENABLE_ANY_CARRIER_TYPE, plugin.ENABLE_ANY_OPERATION, '.*')]);
-            yield* call('ReaderFilter: установка', () => about.ReaderFilter(filter.type, filter.operations, filter.regex));
-            request = yield* createRequest(provider, container, subject, { ...filter, mediaType });
-        } catch (error) {
-            generationFailed = true;
-            throw error;
-        } finally {
-            let resetError;
-            for (const [name, reset] of resets) {
-                try {
-                    yield* call(name + ': сброс', reset);
-                } catch (error) {
-                    resetError ??= error;
-                    report('Сбой сброса ' + name, error.message);
+            if (target?.reader.includes('\\')) {
+                throw new Error(
+                    'Имя считывателя содержит разделитель полного имени контейнера.',
+                );
+            }
+
+            yield about.MediaFilter(plugin.MEDIA_TYPE_SCARD);
+
+            if (target) {
+                filterApplied = true;
+                yield about.ReaderFilter(
+                    target.keyFormat === KeyFormat.Csp
+                        ? ENABLE_CARRIER_TYPE_CSP
+                        : ENABLE_CARRIER_TYPE_PKCS11,
+                    DISABLE_EVERY_CARRIER_OPERATION,
+                    '^' + escapePattern(target.media) + '$',
+                );
+            } else {
+                yield about.ReaderFilter(
+                    ENABLE_CARRIER_TYPE_PKCS11 | 0x04,
+                    ENABLE_ANY_OPERATION,
+                    '.*(pkcs11).*',
+                );
+
+                const modes = yield info.GetReaderModes();
+                const count = yield modes.Count;
+                const medias = [];
+                for (let i = 0; i < count; i++) {
+                    const mode = yield modes.ItemByIndex(i);
+                    medias.push(yield mode.Media);
+                }
+
+                const hasNoReaders = medias.every(
+                    (media) => media === NO_MEDIA_FLAG || media === NO_UNIQUE_FLAG,
+                );
+                if (hasNoReaders) {
+                    yield about.ReaderFilter(
+                        ENABLE_CARRIER_TYPE_PKCS11 | 0x04,
+                        ENABLE_ANY_OPERATION,
+                        '.*.*',
+                    );
                 }
             }
-            if (!generationFailed && resetError) throw resetError;
+
+            const request = yield* createRequest(
+                provider,
+                target ? ['\\\\.', target.reader, name].join('\\') : name,
+                subject,
+            );
+            csr = request.csr;
+            containerId = request.containerId;
+        } finally {
+            // Узкий фильтр живёт только на время этой генерации.
+            if (filterApplied) {
+                try {
+                    yield about.MediaFilter(MEDIA_TYPE_DEFAULT);
+                    yield about.ReaderFilter(
+                        ENABLE_ANY_CARRIER_TYPE,
+                        ENABLE_ANY_OPERATION,
+                        '.*',
+                    );
+                } catch {
+                    // Сброс best-effort: исходный результат не подменяем.
+                }
+            }
         }
 
-        const candidates = [];
-        for (const entry of yield* containers(info, 'после генерации')) {
-            if (!entry.id || before.has(entry.id)) {
-                continue;
-            }
-            if (request.keyId) {
-                if (entry.id === request.keyId || (yield entry.object.FQCN) === request.keyId) {
-                    candidates.push(yield* metadata(entry));
-                }
-                continue;
-            }
-            const actualName = yield entry.object.Name;
-            const fqcn = yield entry.object.FQCN;
-            if ([actualName, fqcn].some(
-                (value) => typeof value === 'string' && value.split('\\').at(-1) === name,
-            )) {
-                candidates.push(yield* metadata(entry));
-            }
-        }
-        if (candidates.length !== 1) {
-            report('Идентификация контейнера', { name, keyId: request.keyId, candidates });
-            throw new Error('Новый контейнер не определён однозначно. Автоматическое удаление недоступно.');
-        }
-        const created = candidates[0];
-        owned.set(created.id, created);
-        report('Создан контейнер', created);
-        return { ...created, csr: request.csr };
+        // Резолв после сброса фильтров — как в create-certificate-request-on-token.ts.
+        const reader = yield* containerReader(info, containerId, name);
+        owned.add(containerId);
+
+        return {
+            payload: {
+                certificateRequest: csr,
+                certificateRequestMetaInfo: { containerName: name, tokenName: reader },
+            },
+            containerId,
+            reader,
+        };
     }
 
-    function* remove({ info }, expected) {
-        const matches = (yield* containers(info, 'перед удалением')).filter(({ id }) => id === expected.id);
+    function* remove({ info }, containerId) {
+        const matches = (yield* containers({ info })).filter(
+            ({ fqcn, uniqueName }) => fqcn === containerId || uniqueName === containerId,
+        );
+
         if (matches.length !== 1) {
             throw new Error('Контейнер для удаления отсутствует или найден неоднозначно.');
         }
-        const current = yield* metadata(matches[0]);
-        if (!['fqcn', 'reader', 'media'].every((field) => current[field] && current[field] === expected[field])) {
-            throw new Error('Метаданные контейнера перед удалением изменились или недоступны.');
-        }
+
         yield matches[0].object.propset_Silent(true);
         yield matches[0].object.Delete();
-        if ((yield* containers(info, 'после удаления')).some(({ id }) => id === expected.id)) {
-            throw new Error('КриптоПро всё ещё видит контейнер после удаления.');
-        }
-        owned.delete(expected.id);
-        report('Удалён контейнер', { id: expected.id });
+        owned.delete(containerId);
     }
 
     return {
         versions: () => run(versions),
         readers: () => run(readers),
-        generate: (name, subject, target) => run((context) => generate(context, name, subject, target)),
-        remove: ({ id }) => {
-            const expected = owned.get(id);
-            if (!expected) {
-                throw new Error('Контейнер не был создан в этой вкладке.');
-            }
-            return run((context) => remove(context, expected));
-        },
-        owned: () => [...owned.values()],
+        generate: (name, subject, target) =>
+            run((context) => generate(context, name, subject, target)),
+        remove: (containerId) => run((context) => remove(context, containerId)),
+        owned: () => [...owned],
     };
 }

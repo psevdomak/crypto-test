@@ -1,6 +1,7 @@
-import { cryptoProAdapter } from './cryptopro.mjs?v=18';
-import { reissue } from './flow.mjs?v=17';
+import { createRequestWithKeyFormat } from './flow.mjs?v=19';
+import { cryptoProAdapter } from './cryptopro.mjs?v=19';
 
+const SUBJECT = 'CN=CryptoPro reissue test';
 const element = (id) => document.getElementById(id);
 const form = element('setup');
 const cleanup = element('cleanup');
@@ -37,6 +38,18 @@ async function perform(operation) {
     }
 }
 
+// Мок `POST /api/v1/company/{companyId}/common/key-format`: бэкенд возвращает
+// result.keyFormat либо ошибается. Неизвестное значение отдаётся как есть —
+// сценарий сам решает оставить первый CSR.
+function mockKeyFormat(value) {
+    return async (serialNumber) => {
+        report('Мок POST key-format', { serialNumber });
+        if (value === 'error') throw new Error('Мок API вернул HTTP 503');
+
+        return value;
+    };
+}
+
 element('readers').addEventListener('click', () => perform(async () => {
     const readers = await adapter.readers();
     report('Режимы считывателей (' + readers.length + ')', readers);
@@ -45,21 +58,41 @@ element('readers').addEventListener('click', () => perform(async () => {
 form.addEventListener('submit', (event) => {
     event.preventDefault();
     return perform(async () => {
-        const mockFormat = element('mock').value;
+        const mock = element('mock').value;
         const name = 'reissue-' + crypto.randomUUID();
-        report('Запуск прогона', { name, mockFormat });
-        const result = await reissue({ adapter, mockFormat, name, report });
-        const serial = result.serialNumber ? 'Серийный номер Рутокена: ' + result.serialNumber + '. ' : '';
-        const outcome = result.regenerated
+        let regenerated = false;
+        report('Запуск прогона', { name, mockFormat: mock });
+
+        const payload = await createRequestWithKeyFormat(
+            {
+                createRequest: (requestName, target) =>
+                    adapter.generate(requestName, SUBJECT, target),
+                readReaders: () => adapter.readers(),
+                deleteContainer: (containerId) => adapter.remove(containerId),
+                requestKeyFormat: mockKeyFormat(mock),
+                logError: (method, error, params) => {
+                    if (method === 'createRequestWithKeyFormat:secondContainer') {
+                        regenerated = true;
+                    }
+                    report(method, {
+                        error: error?.message || String(error),
+                        ...params,
+                    });
+                },
+            },
+            name,
+        );
+
+        const outcome = regenerated
             ? 'Итоговый CSR создан, первоначальный контейнер удалён. Сверьте режим ключа и число нативных диалогов.'
             : 'Сохранён первый CSR. Проверьте режим ключа на токене.';
-        report(serial + outcome, 'CSR\n' + result.csr);
+        report(outcome, 'CSR\n' + payload.certificateRequest);
     });
 });
 
 cleanup.addEventListener('click', () => perform(async () => {
-    for (const container of adapter.owned()) {
-        await adapter.remove(container);
+    for (const containerId of adapter.owned()) {
+        await adapter.remove(containerId);
     }
     report('Тестовые контейнеры удалены.');
 }));

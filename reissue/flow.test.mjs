@@ -1,213 +1,276 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { reissue } from './flow.mjs';
+import { createRequestWithKeyFormat } from './flow.mjs';
+import { KeyFormat } from './key-format.mjs';
 
-const serialNumber = '979006804';
-const cspMedia = 'rutoken_ecp_3a5a7554';
-const pkcsMedia = 'pkcs11_rutoken_ecp_3a5a7554';
-const otherMedia = 'rutoken_ecp_3a5a7555';
-const modes = {
-    CSP: { reader: 'A CSP', media: cspMedia },
-    PKCS11: { reader: 'A PKCS#11', media: pkcsMedia },
-};
-const other = { reader: 'B CSP', media: otherMedia };
+const SERIAL = '979006804';
+const CSP_MEDIA = 'rutoken_ecp_3a5a7554';
+const PKCS11_MEDIA = 'pkcs11_rutoken_ecp_3a5a7554';
+const OTHER_MEDIA = 'rutoken_ecp_3a5a7555';
 
-function container(mode, csr = 'initial-csr') {
-    return { ...mode, id: ['SCARD', mode.media, 'native-id'].join('\\'), csr };
-}
+const cspMode = { reader: 'A CSP', media: CSP_MEDIA };
+const pkcs11Mode = { reader: 'A PKCS#11', media: PKCS11_MEDIA };
+const otherMode = { reader: 'B CSP', media: OTHER_MEDIA };
 
-function scenario({ initial, desired, finalMode = modes[desired], readers, generateError, removeError }) {
+const container = (media, csr, reader = 'reader', key = 'key') => ({
+    payload: { certificateRequest: csr },
+    containerId: 'SCARD\\' + media + '\\' + key,
+    reader,
+});
+
+function scenario({ first, api, second, readers, readersError, createError, deleteError }) {
     const calls = [];
-    const adapter = {
-        async generate(name, subject, target) {
-            calls.push(['generate', name, subject, target]);
-            if (target?.keyFormat && generateError) throw generateError;
-            return target?.keyFormat ? container(finalMode, 'new-csr') : { csr: 'initial-csr', ...initial };
+    const logged = [];
+    const flow = {
+        async createRequest(name, target) {
+            calls.push(['create', name, target?.keyFormat ?? '']);
+
+            if (!target) return first;
+            if (createError) throw createError;
+
+            return (
+                second ??
+                container(
+                    target.keyFormat === KeyFormat.Csp ? CSP_MEDIA : PKCS11_MEDIA,
+                    'second-csr',
+                    target.reader,
+                    'second',
+                )
+            );
         },
-        async readers() {
-            return readers || Object.values(modes).concat(other);
+        async readReaders() {
+            if (readersError) throw readersError;
+
+            return readers ?? [cspMode, pkcs11Mode, otherMode];
         },
-        async remove(created) {
-            calls.push(['remove', created.id]);
-            if (removeError) throw removeError;
+        async deleteContainer(containerId) {
+            calls.push(['delete', containerId]);
+
+            if (deleteError) throw deleteError;
+        },
+        async requestKeyFormat(serialNumber) {
+            calls.push(['api', serialNumber]);
+
+            if (api === 'error') throw new Error('HTTP 503');
+
+            return api;
+        },
+        logError(method) {
+            logged.push(method);
         },
     };
-    const run = () => reissue({
-        adapter, mockFormat: desired, name: 'reissue-test',
-        report(message, value) { calls.push([message, value]); },
-    });
-    return { run, calls };
+
+    return {
+        run: () => createRequestWithKeyFormat(flow, 'reissue'),
+        calls,
+        logged,
+        ids: (action) => calls.filter(([a]) => a === action),
+    };
 }
 
-for (const format of Object.keys(modes)) {
-    test('detects the serial and keeps the first CSR for ' + format, async () => {
-        const initial = container(modes[format]);
-        const { run, calls } = scenario({ initial, desired: format });
-        assert.deepEqual(await run(), { csr: 'initial-csr', regenerated: false, serialNumber });
-        assert.deepEqual(calls.find(([name]) => name.startsWith('Мок POST'))?.[1], { serialNumber });
-        assert.ok(!calls.some(([name]) => name === 'remove'));
-    });
+const firstCsp = () => container(CSP_MEDIA, 'first-csr');
+const firstPkcs11 = () => container(PKCS11_MEDIA, 'first-csr');
 
-    test('regenerates with ' + format + ' on the same token with a second token connected', async () => {
-        const initial = container(format === 'CSP' ? modes.PKCS11 : modes.CSP);
-        const { run, calls } = scenario({ initial, desired: format });
-        assert.deepEqual(await run(), { csr: 'new-csr', regenerated: true, serialNumber });
-        const changes = calls.filter(([name]) => ['generate', 'Проверка итогового контейнера', 'remove'].includes(name));
-        assert.deepEqual(changes.map(([name]) => name), [
-            'generate', 'generate', 'Проверка итогового контейнера', 'remove',
-        ]);
-        assert.deepEqual(changes[0], ['generate', 'reissue-test', 'CN=CryptoPro reissue test', undefined]);
-        assert.deepEqual(changes[1], [
-            'generate', 'reissue-test-final', 'CN=CryptoPro reissue test',
-            { keyFormat: format, ...modes[format] },
-        ]);
-        assert.deepEqual(changes[3], ['remove', initial.id]);
+for (const [format, make] of [
+    [KeyFormat.Csp, firstCsp],
+    [KeyFormat.Pkcs11, firstPkcs11],
+]) {
+    test(
+        'Если API подтвердил формат ' + format + ', то остаётся первый контейнер и его CSR',
+        async () => {
+            const first = make();
+            const { run, calls, ids } = scenario({ first, api: format });
+
+            assert.strictEqual(await run(), first.payload);
+            assert.ok(calls.some(([action, serial]) => action === 'api' && serial === SERIAL));
+            assert.equal(ids('create').length, 1);
+            assert.equal(ids('delete').length, 0);
+        },
+    );
+}
+
+for (const [format, make] of [
+    [KeyFormat.Csp, firstPkcs11],
+    [KeyFormat.Pkcs11, firstCsp],
+]) {
+    test(
+        'Если API вернул другой формат (' + format + '), то второй контейнер на том же токене, первый удаляется',
+        async () => {
+            const first = make();
+            const { run, ids } = scenario({ first, api: format });
+
+            assert.deepEqual(await run(), { certificateRequest: 'second-csr' });
+            assert.deepEqual(ids('create')[1], ['create', 'reissue', format]);
+            assert.deepEqual(ids('delete'), [['delete', first.containerId]]);
+        },
+    );
+}
+
+for (const api of ['error', 'unknown']) {
+    test('Если API ответил «' + api + '», то остаётся первый CSR', async () => {
+        const first = firstPkcs11();
+        const { run, ids, logged } = scenario({ first, api });
+
+        assert.strictEqual(await run(), first.payload);
+        assert.equal(ids('create').length, 1);
+        assert.equal(ids('delete').length, 0);
+        assert.deepEqual(
+            logged,
+            api === 'error' ? ['requestKeyFormat'] : ['requestKeyFormat:unknown'],
+        );
     });
 }
 
-test('recognizes FQCN with a reader prefix and different case', async () => {
-    const { run } = scenario({
-        initial: { id: 'unrecognized', fqcn: '\\\\.\\A CSP\\SCARD\\RUTOKEN_ECP_3A5A7554\\0000\\0000' },
-        desired: 'CSP',
+for (const [index, first] of [
+    container('other_vendor_3a5a7554', 'first-csr'),
+    {
+        ...container('HDIMAGE', 'first-csr'),
+        containerId: 'HDIMAGE\\key',
+        reader: 'HDIMAGE',
+    },
+].entries()) {
+    test('Если носитель не Рутокен, то API не вызывается (' + index + ')', async () => {
+        const { run, ids } = scenario({ first, api: KeyFormat.Pkcs11 });
+
+        assert.strictEqual(await run(), first.payload);
+        assert.equal(ids('api').length, 0);
     });
-    assert.equal((await run()).serialNumber, serialNumber);
+}
+
+test('Если первый контейнер создан в режиме FKS, то он удаляется, API не вызывается', async () => {
+    const first = container('rutoken_fkc_3a5a7554', 'first-csr');
+    const { run, ids } = scenario({ first, api: KeyFormat.Csp });
+
+    await assert.rejects(run, /в режиме FKS/);
+    assert.equal(ids('api').length, 0);
+    assert.deepEqual(ids('delete'), [['delete', first.containerId]]);
 });
 
-test('recognizes a Lite serial in the documented format', async () => {
-    const { run } = scenario({
-        initial: { id: 'SCARD\\rutoken_lt_2e823e54\\1000\\B9A6' }, desired: 'CSP',
+test('Если первый контейнер не идентифицируется, то он удаляется, ошибка пробрасывается', async () => {
+    const first = container('rutoken_ecp3_3a5a7554', 'first-csr', 'Rutoken ECP 0');
+    const { run, ids } = scenario({ first, api: KeyFormat.Csp });
+
+    await assert.rejects(run, /однозначно определить/);
+    assert.equal(ids('api').length, 0);
+    assert.deepEqual(ids('delete'), [['delete', first.containerId]]);
+});
+
+test('Если итоговый контейнер не идентифицируется, то он удаляется, ошибка пробрасывается', async () => {
+    const second = container(
+        'rutoken_ecp3_3a5a7554',
+        'second-csr',
+        'Rutoken ECP 0',
+        'second',
+    );
+    const { run, ids } = scenario({
+        first: firstPkcs11(),
+        api: KeyFormat.Csp,
+        second,
     });
-    assert.equal((await run()).serialNumber, '780287572');
+
+    await assert.rejects(run, /однозначно определить/);
+    assert.deepEqual(ids('delete'), [['delete', second.containerId]]);
 });
 
-test('API failures keep the initial CSR and key in the selected format', async () => {
-    for (const format of Object.keys(modes)) {
-        for (const desired of ['error', 'unsupported']) {
-            const { run, calls } = scenario({ initial: container(modes[format]), desired });
-            assert.deepEqual(await run(), { csr: 'initial-csr', regenerated: false, serialNumber });
-            const changes = calls.filter(([name]) => name === 'generate' || name === 'remove');
-            assert.equal(changes.length, 1);
-            assert.match(calls.at(-1)[1].error, desired === 'error' ? /HTTP 503/ : /Неизвестный формат/);
-            assert.equal(calls.at(-1)[1].keyFormat, format);
-        }
-    }
-});
+for (const [index, options] of [
+    { readers: [pkcs11Mode, otherMode] },
+    { readers: [pkcs11Mode, cspMode, { ...cspMode, reader: 'A second CSP' }] },
+    { readersError: new Error('GetReaderModes failed') },
+].entries()) {
+    test(
+        'Если подготовка второй генерации не удалась, то возвращается CSR первого контейнера (' + index + ')',
+        async () => {
+            const first = firstPkcs11();
+            const { run, ids } = scenario({ first, api: KeyFormat.Csp, ...options });
 
-test('other hardware and software media skip the API and keep the first CSR', async () => {
-    for (const initial of [
-        { id: 'SCARD\\other_vendor_3a5a7554\\key', reader: 'Other Token' },
-        { id: 'HDIMAGE\\key', reader: 'HDIMAGE', media: 'NO_UNIQUE' },
-        { id: 'opaque', reader: 'Other Token' },
-    ]) {
-        const { run, calls } = scenario({ initial, desired: 'PKCS11' });
-        assert.deepEqual(await run(), { csr: 'initial-csr', regenerated: false });
-        assert.equal(calls.filter(([name]) => name === 'generate').length, 1);
-        assert.ok(!calls.some(([name]) => name.startsWith('Мок POST') || name === 'remove'));
-    }
-});
+            assert.strictEqual(await run(), first.payload);
+            assert.equal(ids('delete').length, 0);
+        },
+    );
+}
 
-test('removal failure reports the final container was already created', async () => {
-    const initial = container(modes.PKCS11);
-    const { run, calls } = scenario({ initial, desired: 'CSP', removeError: new Error('Delete failed') });
-    await assert.rejects(run, /Итоговый контейнер создан.*Delete failed/);
-    assert.equal(calls.at(-2)[0], 'Проверка итогового контейнера');
-    assert.deepEqual(calls.at(-1), ['remove', initial.id]);
-});
+for (const createError of [
+    new Error('CreateRequest failed'),
+    new Error('Отмена пользователем (0x8010006E)'),
+]) {
+    test(
+        'Если вторая генерация упала, то возвращается CSR первого контейнера, ошибка логируется: ' +
+            createError.message,
+        async () => {
+            const first = firstPkcs11();
+            const { run, ids, logged } = scenario({
+                first,
+                api: KeyFormat.Csp,
+                createError,
+            });
 
-test('missing or ambiguous target aborts before removal', async () => {
-    for (const readers of [
-        [modes.PKCS11, other],
-        [modes.PKCS11, modes.CSP, { ...modes.CSP, reader: 'A other CSP reader' }],
-        [modes.PKCS11, modes.CSP, { ...other, reader: modes.CSP.reader }],
-    ]) {
-        const { run, calls } = scenario({ initial: container(modes.PKCS11), desired: 'CSP', readers });
-        await assert.rejects(run, /отсутствует или найден неоднозначно/);
-        assert.ok(!calls.some(([name]) => name === 'remove'));
-    }
-});
+            assert.strictEqual(await run(), first.payload);
+            assert.equal(ids('delete').length, 0);
+            assert.ok(logged.includes('createRequestWithKeyFormat:createSecond'));
+        },
+    );
+}
 
-test('a recognizable Rutoken with an unknown serial never reaches the mock', async () => {
-    for (const id of ['SCARD\\rutoken_fkc_unknown\\key', 'SCARD\\rutoken_ecp_00000001\\key']) {
-        const { run, calls } = scenario({ initial: { id }, desired: 'CSP' });
-        await assert.rejects(run, /Не удалось однозначно определить серийный номер/);
-        assert.ok(!calls.some(([name]) => name.startsWith('Мок POST')));
-    }
-});
-
-test('container metadata must agree on the physical token', async () => {
-    const { run, calls } = scenario({
-        initial: { ...container(modes.CSP), media: otherMedia }, desired: 'CSP',
+test('Если удаление итогового контейнера упало, то ошибка сверки не подменяется, сбой логируется', async () => {
+    const second = container(PKCS11_MEDIA, 'second-csr', 'A CSP', 'second');
+    const { run, logged } = scenario({
+        first: firstPkcs11(),
+        api: KeyFormat.Csp,
+        second,
+        deleteError: new Error('Delete failed'),
     });
-    await assert.rejects(run, /Media контейнера указывает на другой токен/);
-    assert.equal(calls.length, 1);
-});
 
-test('second-generation errors and cancellation remove only the temporary container', async () => {
-    const initial = container(modes.PKCS11);
-    for (const message of ['CreateRequest failed', 'Отмена пользователем (0x8010006E)']) {
-        const generateError = new Error(message);
-        const { run, calls } = scenario({ initial, desired: 'CSP', generateError });
-        await assert.rejects(run, (error) => error === generateError);
-        assert.deepEqual(calls.filter(([name]) => name === 'remove'), [['remove', initial.id]]);
-    }
-});
-
-test('a cleanup failure is logged without replacing the second-generation error', async () => {
-    const initial = container(modes.PKCS11);
-    const generateError = new Error('CreateRequest failed');
-    const { run, calls } = scenario({
-        initial, desired: 'CSP', generateError, removeError: new Error('Delete failed'),
-    });
-    await assert.rejects(run, (error) => error === generateError);
-    assert.deepEqual(calls.at(-2), ['remove', initial.id]);
-    assert.deepEqual(calls.at(-1), [
-        'Не удалось удалить временный контейнер после сбоя второй генерации',
-        { id: initial.id, error: 'Delete failed' },
+    await assert.rejects(run, /на другом токене или в другом формате/);
+    assert.deepEqual(logged, [
+        'createRequestWithKeyFormat:secondContainer',
+        'createRequestWithKeyFormat:verifySecond',
+        'deleteContainer',
     ]);
 });
 
-test('wrong token or format aborts without removing the initial container', async () => {
-    for (const finalMode of [{ ...modes.CSP, media: otherMedia }, modes.PKCS11]) {
-        const { run, calls } = scenario({ initial: container(modes.PKCS11), desired: 'CSP', finalMode });
-        await assert.rejects(run, /Итоговый контейнер создан на другом/);
-        assert.ok(!calls.some(([name]) => name === 'remove'));
-    }
-});
+for (const [index, second] of [
+    container(OTHER_MEDIA, 'second-csr', 'A CSP', 'second'),
+    container(PKCS11_MEDIA, 'second-csr', 'A CSP', 'second'),
+].entries()) {
+    test(
+        'Если итоговый контейнер на другом токене или в другом формате, то он удаляется, первый сохраняется (' +
+            index +
+            ')',
+        async () => {
+            const first = firstPkcs11();
+            const { run, ids } = scenario({ first, api: KeyFormat.Csp, second });
 
-test('recovers the serial when only the container Media has the token ID', async () => {
-    const { run, calls } = scenario({
-        initial: { ...modes.CSP, id: 'opaque', fqcn: 'opaque-fqcn' }, desired: 'CSP',
+            await assert.rejects(run, /на другом токене или в другом формате/);
+            assert.deepEqual(ids('delete'), [['delete', second.containerId]]);
+        },
+    );
+}
+
+test('Если итоговый контейнер имеет тот же id, что первый, то ничего не удаляется', async () => {
+    const first = firstPkcs11();
+    const { run, ids } = scenario({
+        first,
+        api: KeyFormat.Csp,
+        second: {
+            ...container(CSP_MEDIA, 'second-csr'),
+            containerId: first.containerId,
+        },
     });
-    assert.equal((await run()).serialNumber, serialNumber);
-    assert.equal(calls.find(([name]) => name === 'Определён выбранный токен')[1].source, 'Media контейнера');
+
+    await assert.rejects(run);
+    assert.equal(ids('delete').length, 0);
 });
 
-test('recovers the serial from an unambiguous matching reader only', async () => {
-    const { run, calls } = scenario({
-        initial: { reader: 'Selected reader nickname', id: 'opaque' },
-        readers: [{ ...modes.CSP, label: 'Selected reader nickname' }, other],
-        desired: 'CSP',
+test('Если удалить первый контейнер не удалось, то сообщается, что итоговый уже создан', async () => {
+    const { run, ids } = scenario({
+        first: firstPkcs11(),
+        api: KeyFormat.Csp,
+        deleteError: new Error('Delete failed'),
     });
-    assert.equal((await run()).serialNumber, serialNumber);
-    assert.equal(calls.find(([name]) => name === 'Определён выбранный токен')[1].source, 'Media считывателя');
-});
 
-test('another reader or multiple modes for the selected reader cannot determine the format', async () => {
-    for (const readers of [[other], [modes.CSP, { ...modes.PKCS11, reader: modes.CSP.reader }]]) {
-        const { run, calls } = scenario({
-            initial: { reader: modes.CSP.reader, id: 'opaque', media: 'rutoken_ecp', fqcn: 'opaque-fqcn' },
-            readers, desired: 'CSP',
-        });
-        await assert.rejects(run, /Не удалось однозначно определить/);
-        assert.ok(calls.some(([name, details]) => name === 'Ответ GetReaderModes' && 'matches' in details));
-        assert.ok(!calls.some(([name]) => name.startsWith('Мок POST') || name === 'remove'));
-    }
-});
-
-test('a generated FKS container cannot reach the format API', async () => {
-    const initial = container({ reader: 'A FKS', media: 'rutoken_fkc_3a5a7554' });
-    const { run, calls } = scenario({ initial, desired: 'CSP' });
-    await assert.rejects(run, /КриптоПро создал контейнер в режиме FKS/);
-    assert.equal(calls.filter(([name]) => name === 'generate').length, 1);
-    assert.ok(!calls.some(([name]) => name.startsWith('Мок POST') || name === 'remove'));
+    await assert.rejects(
+        run,
+        /Итоговый контейнер создан, но удалить первоначальный не удалось\. Delete failed/,
+    );
+    assert.equal(ids('create').length, 2);
 });
