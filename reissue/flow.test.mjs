@@ -21,6 +21,7 @@ const container = (media, csr, reader = 'reader', key = 'key') => ({
 function scenario({ first, api, second, readers, readersError, createError, deleteError }) {
     const calls = [];
     const logged = [];
+    const loggedParams = [];
     const flow = {
         async createRequest(name, target) {
             calls.push(['create', name, target?.keyFormat ?? '']);
@@ -55,8 +56,9 @@ function scenario({ first, api, second, readers, readersError, createError, dele
 
             return api;
         },
-        logError(method) {
+        logError(method, _error, params) {
             logged.push(method);
+            loggedParams.push({ method, ...params });
         },
     };
 
@@ -64,6 +66,7 @@ function scenario({ first, api, second, readers, readersError, createError, dele
         run: () => createRequestWithKeyFormat(flow, 'reissue'),
         calls,
         logged,
+        loggedParams,
         ids: (action) => calls.filter(([a]) => a === action),
     };
 }
@@ -191,42 +194,59 @@ test('Одинаковые записи CSP-считывателя считаю�
     });
 });
 
-for (const [options, errorPattern] of [
-    [{ readers: [pkcs11Mode, otherMode] }, /считыватель CSP не найден/],
-    [
-        { readers: [pkcs11Mode, cspMode, { ...cspMode, reader: 'A second CSP' }] },
-        /считыватель CSP определён неоднозначно/,
-    ],
-    [{ readersError: new Error('GetReaderModes failed') }, /GetReaderModes failed/],
-]) {
+for (const [index, options] of [
+    { readers: [pkcs11Mode, otherMode] },
+    { readers: [pkcs11Mode, cspMode, { ...cspMode, reader: 'A second CSP' }] },
+    { readersError: new Error('GetReaderModes failed') },
+].entries()) {
     test(
-        'Если подготовка второй генерации не удалась, то ошибка пробрасывается: ' + errorPattern.source,
+        'Если подготовка второй генерации не удалась, то возвращается CSR первого контейнера (' + index + ')',
         async () => {
             const first = firstPkcs11();
-            const { run, ids, logged } = scenario({ first, api: KeyFormat.Csp, ...options });
+            const { run, ids } = scenario({ first, api: KeyFormat.Csp, ...options });
 
-            await assert.rejects(run, errorPattern);
+            assert.deepEqual(await run(), { payload: first.payload, regenerated: false });
             assert.equal(ids('create').length, 1);
             assert.equal(ids('delete').length, 0);
-            assert.ok(logged.includes('createRequestWithKeyFormat:findTargetReader'));
         },
     );
 }
 
-for (const createError of [
-    new Error('CreateRequest failed'),
+test('Если считыватель нужного формата не найден, то в лог уходит список режимов считывателей', async () => {
+    const readers = [pkcs11Mode, otherMode];
+    const first = firstPkcs11();
+    const { run, loggedParams } = scenario({ first, api: KeyFormat.Csp, readers });
+
+    assert.deepEqual(await run(), { payload: first.payload, regenerated: false });
+    const entry = loggedParams.find(
+        ({ method }) => method === 'createRequestWithKeyFormat:createSecond',
+    );
+    assert.equal(entry.serialNumber, SERIAL);
+    assert.deepEqual(entry.readerModes, readers);
+});
+
+test('Если вторая генерация упала, то возвращается CSR первого контейнера, ошибка логируется', async () => {
+    const first = firstPkcs11();
+    const { run, ids, logged } = scenario({
+        first,
+        api: KeyFormat.Csp,
+        createError: new Error('CreateRequest failed'),
+    });
+
+    assert.deepEqual(await run(), { payload: first.payload, regenerated: false });
+    assert.equal(ids('delete').length, 0);
+    assert.ok(logged.includes('createRequestWithKeyFormat:createSecond'));
+});
+
+for (const [index, createError] of [
     new Error('Отмена пользователем (0x8010006E)'),
-]) {
+    Object.assign(new Error('Canceled'), { code: '0x8010006E' }),
+].entries()) {
     test(
-        'Если вторая генерация упала, то первый контейнер удаляется и пробрасывается ошибка: ' +
-            createError.message,
+        'Если пользователь отменил вторую генерацию, то первый контейнер удаляется, исходная ошибка пробрасывается (' + index + ')',
         async () => {
             const first = firstPkcs11();
-            const { run, ids, logged } = scenario({
-                first,
-                api: KeyFormat.Csp,
-                createError,
-            });
+            const { run, ids, logged } = scenario({ first, api: KeyFormat.Csp, createError });
 
             await assert.rejects(run, (error) => error === createError);
             assert.deepEqual(ids('delete'), [['delete', first.containerId]]);
@@ -234,6 +254,19 @@ for (const createError of [
         },
     );
 }
+
+test('Если после отмены не удалось удалить первый контейнер, то отмена не подменяется, сбой логируется', async () => {
+    const createError = new Error('Отмена пользователем (0x8010006E)');
+    const { run, logged } = scenario({
+        first: firstPkcs11(),
+        api: KeyFormat.Csp,
+        createError,
+        deleteError: new Error('Delete failed'),
+    });
+
+    await assert.rejects(run, (error) => error === createError);
+    assert.ok(logged.includes('deleteContainer'));
+});
 
 test('Если удаление итогового контейнера упало, то ошибка сверки не подменяется, сбой логируется', async () => {
     const second = container(PKCS11_MEDIA, 'second-csr', 'A CSP', 'second');
@@ -286,7 +319,7 @@ test('Если итоговый контейнер имеет тот же id, ч
 });
 
 test('Если у итогового контейнера нет id, первый сохраняется и CSR не возвращается', async () => {
-    const { run, ids } = scenario({
+    const { run, ids, logged } = scenario({
         first: firstPkcs11(),
         api: KeyFormat.Csp,
         second: { ...container(CSP_MEDIA, 'second-csr', 'A CSP'), containerId: '' },
@@ -294,6 +327,7 @@ test('Если у итогового контейнера нет id, первы�
 
     await assert.rejects(run, /не вернул уникальное имя итогового контейнера/);
     assert.equal(ids('delete').length, 0);
+    assert.ok(logged.includes('createRequestWithKeyFormat:emptySecondId'));
 });
 
 test('Если удалить первый контейнер не удалось, то сообщается, что итоговый уже создан', async () => {

@@ -4,7 +4,7 @@ import {
     identifyToken,
     isSameToken,
     tokenMedia,
-} from './token-identity.mjs?v=21';
+} from './token-identity.mjs';
 
 /**
  * Интерфейс зависимостей совпадает с KeyFormatFlow
@@ -79,36 +79,63 @@ async function resolveKeyFormat(flow, token) {
     }
 }
 
-/** Второй контейнер на том же токене в запрошенном API формате. */
+/** Пользователь отменил действие в окне КриптоПро: код в `code` либо в тексте ошибки. */
+function isCanceledByUser(error) {
+    const {code, message} = error ?? {};
+    const canceled = '0x8010006e';
+
+    return (
+        String(code ?? '').toLowerCase() === canceled ||
+        String(message ?? '').toLowerCase().includes(canceled)
+    );
+}
+
+/**
+ * Второй контейнер на том же токене в нужном формате. `undefined` — создать не
+ * удалось (нет считывателя, ошибка драйвера): остаётся CSR первого.
+ * Отмена пользователем — ошибка: первый контейнер удаляется, ошибка пробрасывается.
+ */
 async function createSecondRequest(flow, name, firstId, token, keyFormat) {
-    const params = {...tokenParams(token), keyFormat};
-    let target;
     let readerModes;
+
     try {
         readerModes = await flow.readReaders();
-        target = findTargetReader(readerModes, token, keyFormat);
+
+        const target = findTargetReader(readerModes, token, keyFormat);
+
+        return await flow.createRequest(name, {keyFormat, ...target});
     } catch (error) {
-        flow.logError('createRequestWithKeyFormat:findTargetReader', error, {
-            ...params,
+        // Список режимов считывателей — главное для разбора «почему не нашли».
+        flow.logError('createRequestWithKeyFormat:createSecond', error, {
+            ...tokenParams(token),
+            keyFormat,
             containerId: firstId,
             readerModes,
         });
-        throw error;
-    }
 
-    return withCleanupOnError(
-        flow,
-        firstId,
-        'createRequestWithKeyFormat:createSecond',
-        () => flow.createRequest(name, {keyFormat, ...target}),
-        params,
-    );
+        if (isCanceledByUser(error)) {
+            await deleteQuietly(flow, firstId);
+
+            throw error;
+        }
+
+        return undefined;
+    }
 }
 
 /** Итоговый контейнер должен быть на том же токене и в нужном формате; иначе он удаляется. */
 async function verifySecondRequest(flow, first, second, token, keyFormat) {
-    if (!second.containerId?.trim()) {
-        throw new Error('КриптоПро не вернул уникальное имя итогового контейнера. Формат не подтверждён.');
+    // Без уникального имени формат итогового контейнера не подтвердить, а удалить его нельзя.
+    if (!second.containerId.trim()) {
+        flow.logError(
+            'createRequestWithKeyFormat:emptySecondId',
+            'КриптоПро не вернул уникальное имя итогового контейнера',
+            {...tokenParams(token), keyFormat, firstId: first.containerId},
+        );
+
+        throw new Error(
+            'КриптоПро не вернул уникальное имя итогового контейнера. Формат не подтверждён.',
+        );
     }
 
     const isSameContainer = second.containerId === first.containerId;
@@ -160,7 +187,8 @@ async function verifySecondRequest(flow, first, second, token, keyFormat) {
  * 1. Первая генерация — как раньше.
  * 2. Не Рутокен, ошибка API, неизвестный или тот же формат — остаётся первый CSR.
  * 3. Иной формат — второй контейнер на том же токене, затем удаляется первый.
- * 4. Ошибка или отмена при создании второго контейнера — убрать первый и вернуть ошибку.
+ * 4. Второй контейнер создать не удалось — тоже остаётся первый CSR, ошибка в лог.
+ *    Исключение — отмена пользователем: первый контейнер удаляется, ошибка пробрасывается.
  */
 export async function createRequestWithKeyFormat(flow, name) {
     const first = await flow.createRequest(name);
@@ -203,6 +231,9 @@ export async function createRequestWithKeyFormat(flow, name) {
         token,
         keyFormat,
     );
+
+    // Второй контейнер создать не удалось — в заявку идёт CSR первого.
+    if (!second) return {payload: first.payload, regenerated: false};
 
     await verifySecondRequest(flow, first, second, token, keyFormat);
 
