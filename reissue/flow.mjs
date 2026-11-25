@@ -7,7 +7,7 @@ import {
 } from './token-identity.mjs';
 
 /**
- * Зависимости сценария. Интерфейс и семантика совпадают с KeyFormatFlow
+ * Интерфейс зависимостей совпадает с KeyFormatFlow
  * из sme-qds-ui (`libs/common/crypto/src/lib/cadescom/key-format-flow.ts`).
  *
  * createRequest(name, target?) отвечает `{payload, containerId, reader}`;
@@ -79,28 +79,35 @@ async function resolveKeyFormat(flow, token) {
     }
 }
 
-/**
- * Второй контейнер на том же токене в нужном формате. `undefined` — создать не
- * удалось (нет считывателя, отмена, ошибка драйвера): остаётся CSR первого.
- */
+/** Второй контейнер на том же токене в запрошенном API формате. */
 async function createSecondRequest(flow, name, firstId, token, keyFormat) {
+    const params = {...tokenParams(token), keyFormat};
+    let target;
     try {
-        const target = findTargetReader(await flow.readReaders(), token, keyFormat);
-
-        return await flow.createRequest(name, {keyFormat, ...target});
+        target = findTargetReader(await flow.readReaders(), token, keyFormat);
     } catch (error) {
-        flow.logError('createRequestWithKeyFormat:createSecond', error, {
-            ...tokenParams(token),
-            keyFormat,
+        flow.logError('createRequestWithKeyFormat:findTargetReader', error, {
+            ...params,
             containerId: firstId,
         });
-
-        return undefined;
+        throw error;
     }
+
+    return withCleanupOnError(
+        flow,
+        firstId,
+        'createRequestWithKeyFormat:createSecond',
+        () => flow.createRequest(name, {keyFormat, ...target}),
+        params,
+    );
 }
 
 /** Итоговый контейнер должен быть на том же токене и в нужном формате; иначе он удаляется. */
 async function verifySecondRequest(flow, first, second, token, keyFormat) {
+    if (!second.containerId?.trim()) {
+        throw new Error('КриптоПро не вернул уникальное имя итогового контейнера. Формат не подтверждён.');
+    }
+
     const isSameContainer = second.containerId === first.containerId;
     const identify = () =>
         identifyToken(tokenMedia(second.containerId), second.reader, flow.readReaders);
@@ -150,7 +157,7 @@ async function verifySecondRequest(flow, first, second, token, keyFormat) {
  * 1. Первая генерация — как раньше.
  * 2. Не Рутокен, ошибка API, неизвестный или тот же формат — остаётся первый CSR.
  * 3. Иной формат — второй контейнер на том же токене, затем удаляется первый.
- * 4. Второй контейнер создать не удалось — тоже остаётся первый CSR, ошибка в лог.
+ * 4. Ошибка или отмена при создании второго контейнера — убрать первый и вернуть ошибку.
  */
 export async function createRequestWithKeyFormat(flow, name) {
     const first = await flow.createRequest(name);
@@ -186,14 +193,11 @@ export async function createRequestWithKeyFormat(flow, name) {
 
     const second = await createSecondRequest(
         flow,
-        name,
+        name + '-final',
         first.containerId,
         token,
         keyFormat,
     );
-
-    // Второй контейнер создать не удалось — в заявку идёт CSR первого.
-    if (!second) return first.payload;
 
     await verifySecondRequest(flow, first, second, token, keyFormat);
 

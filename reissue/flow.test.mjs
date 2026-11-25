@@ -100,7 +100,7 @@ for (const [format, make] of [
             const { run, ids } = scenario({ first, api: format });
 
             assert.deepEqual(await run(), { certificateRequest: 'second-csr' });
-            assert.deepEqual(ids('create')[1], ['create', 'reissue', format]);
+            assert.deepEqual(ids('create')[1], ['create', 'reissue-final', format]);
             assert.deepEqual(ids('delete'), [['delete', first.containerId]]);
         },
     );
@@ -178,13 +178,15 @@ for (const [index, options] of [
     { readersError: new Error('GetReaderModes failed') },
 ].entries()) {
     test(
-        'Если подготовка второй генерации не удалась, то возвращается CSR первого контейнера (' + index + ')',
+        'Если подготовка второй генерации не удалась, то ошибка пробрасывается (' + index + ')',
         async () => {
             const first = firstPkcs11();
-            const { run, ids } = scenario({ first, api: KeyFormat.Csp, ...options });
+            const { run, ids, logged } = scenario({ first, api: KeyFormat.Csp, ...options });
 
-            assert.strictEqual(await run(), first.payload);
+            await assert.rejects(run, /считыватель CSP|GetReaderModes failed/);
+            assert.equal(ids('create').length, 1);
             assert.equal(ids('delete').length, 0);
+            assert.ok(logged.includes('createRequestWithKeyFormat:findTargetReader'));
         },
     );
 }
@@ -194,7 +196,7 @@ for (const createError of [
     new Error('Отмена пользователем (0x8010006E)'),
 ]) {
     test(
-        'Если вторая генерация упала, то возвращается CSR первого контейнера, ошибка логируется: ' +
+        'Если вторая генерация упала, то первый контейнер удаляется и пробрасывается ошибка: ' +
             createError.message,
         async () => {
             const first = firstPkcs11();
@@ -204,8 +206,8 @@ for (const createError of [
                 createError,
             });
 
-            assert.strictEqual(await run(), first.payload);
-            assert.equal(ids('delete').length, 0);
+            await assert.rejects(run, (error) => error === createError);
+            assert.deepEqual(ids('delete'), [['delete', first.containerId]]);
             assert.ok(logged.includes('createRequestWithKeyFormat:createSecond'));
         },
     );
@@ -258,6 +260,17 @@ test('Если итоговый контейнер имеет тот же id, ч
     });
 
     await assert.rejects(run);
+    assert.equal(ids('delete').length, 0);
+});
+
+test('Если у итогового контейнера нет id, первый сохраняется и CSR не возвращается', async () => {
+    const { run, ids } = scenario({
+        first: firstPkcs11(),
+        api: KeyFormat.Csp,
+        second: { ...container(CSP_MEDIA, 'second-csr', 'A CSP'), containerId: '' },
+    });
+
+    await assert.rejects(run, /не вернул уникальное имя итогового контейнера/);
     assert.equal(ids('delete').length, 0);
 });
 

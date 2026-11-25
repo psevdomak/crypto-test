@@ -152,6 +152,7 @@ export function cryptoProAdapter(plugin, report) {
 
     function* generate(context, name, subject, target) {
         const { about, provider, info } = context;
+        const container = target ? ['\\\\.', target.reader, name].join('\\') : name;
         let filterApplied = false;
         let csr;
         let containerId = '';
@@ -166,14 +167,22 @@ export function cryptoProAdapter(plugin, report) {
             yield about.MediaFilter(plugin.MEDIA_TYPE_SCARD);
 
             if (target) {
+                const type = target.keyFormat === KeyFormat.Csp
+                    ? ENABLE_CARRIER_TYPE_CSP
+                    : ENABLE_CARRIER_TYPE_PKCS11;
+                const operations = DISABLE_EVERY_CARRIER_OPERATION;
+                const regex = '^' + escapePattern(target.media) + '$';
+                report('Фильтр итогового контейнера', {
+                    container,
+                    keyFormat: target.keyFormat,
+                    reader: target.reader,
+                    media: target.media,
+                    type,
+                    operations,
+                    regex,
+                });
                 filterApplied = true;
-                yield about.ReaderFilter(
-                    target.keyFormat === KeyFormat.Csp
-                        ? ENABLE_CARRIER_TYPE_CSP
-                        : ENABLE_CARRIER_TYPE_PKCS11,
-                    DISABLE_EVERY_CARRIER_OPERATION,
-                    '^' + escapePattern(target.media) + '$',
-                );
+                yield about.ReaderFilter(type, operations, regex);
             } else {
                 yield about.ReaderFilter(
                     ENABLE_CARRIER_TYPE_PKCS11 | 0x04,
@@ -201,11 +210,7 @@ export function cryptoProAdapter(plugin, report) {
                 }
             }
 
-            const request = yield* createRequest(
-                provider,
-                target ? ['\\\\.', target.reader, name].join('\\') : name,
-                subject,
-            );
+            const request = yield* createRequest(provider, container, subject);
             csr = request.csr;
             containerId = request.containerId;
         } finally {
@@ -226,7 +231,8 @@ export function cryptoProAdapter(plugin, report) {
 
         // Резолв после сброса фильтров — как в create-certificate-request-on-token.ts.
         const reader = yield* containerReader(info, containerId, name);
-        owned.add(containerId);
+        if (containerId?.trim()) owned.add(containerId);
+        report('Контейнер из ответа КриптоПро', { name, containerId, reader });
 
         return {
             payload: {

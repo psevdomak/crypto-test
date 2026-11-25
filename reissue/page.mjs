@@ -1,5 +1,5 @@
-import { createRequestWithKeyFormat } from './flow.mjs?v=19';
-import { cryptoProAdapter } from './cryptopro.mjs?v=19';
+import { createRequestWithKeyFormat } from './flow.mjs?v=20';
+import { cryptoProAdapter } from './cryptopro.mjs?v=20';
 
 const SUBJECT = 'CN=CryptoPro reissue test';
 const element = (id) => document.getElementById(id);
@@ -60,7 +60,6 @@ form.addEventListener('submit', (event) => {
     return perform(async () => {
         const mock = element('mock').value;
         const name = 'reissue-' + crypto.randomUUID();
-        let regenerated = false;
         report('Запуск прогона', { name, mockFormat: mock });
 
         const payload = await createRequestWithKeyFormat(
@@ -71,9 +70,6 @@ form.addEventListener('submit', (event) => {
                 deleteContainer: (containerId) => adapter.remove(containerId),
                 requestKeyFormat: mockKeyFormat(mock),
                 logError: (method, error, params) => {
-                    if (method === 'createRequestWithKeyFormat:secondContainer') {
-                        regenerated = true;
-                    }
                     report(method, {
                         error: error?.message || String(error),
                         ...params,
@@ -83,9 +79,10 @@ form.addEventListener('submit', (event) => {
             name,
         );
 
+        const regenerated = payload.certificateRequestMetaInfo.containerName === name + '-final';
         const outcome = regenerated
-            ? 'Итоговый CSR создан, первоначальный контейнер удалён. Сверьте режим ключа и число нативных диалогов.'
-            : 'Сохранён первый CSR. Проверьте режим ключа на токене.';
+            ? 'Итоговый CSR создан, первоначальный контейнер удалён.'
+            : 'Сохранён первый CSR.';
         report(outcome, 'CSR\n' + payload.certificateRequest);
     });
 });
