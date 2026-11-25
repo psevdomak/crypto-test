@@ -95,11 +95,15 @@ export async function identifyToken(containerMedia, reader, readReaders) {
 
 /** Единственный считыватель выбранного токена в запрошенном режиме; иначе — ошибка. */
 export function findTargetReader(readers, token, keyFormat) {
-    const targets = readers.filter(({media}) => {
+    const targets = [];
+    for (const {reader, media} of readers) {
         const identity = rutokenIdentity(media);
+        if (!reader || !isSameToken(identity, token) || identity.keyFormat !== keyFormat) continue;
 
-        return !!identity && isSameToken(identity, token) && identity.keyFormat === keyFormat;
-    });
+        if (!targets.some((target) => target.reader === reader && target.media === media)) {
+            targets.push({reader, media});
+        }
+    }
 
     if (targets.length !== 1) {
         throw new Error(
@@ -107,7 +111,7 @@ export function findTargetReader(readers, token, keyFormat) {
                 token.serialNumber +
                 ' считыватель ' +
                 keyFormat +
-                ' отсутствует или найден неоднозначно.',
+                (targets.length === 0 ? ' не найден.' : ' определён неоднозначно.'),
         );
     }
 

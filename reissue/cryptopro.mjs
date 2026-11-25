@@ -152,18 +152,17 @@ export function cryptoProAdapter(plugin, report) {
 
     function* generate(context, name, subject, target) {
         const { about, provider, info } = context;
+        if (target?.reader.includes('\\')) {
+            throw new Error(
+                'Имя считывателя содержит разделитель полного имени контейнера.',
+            );
+        }
+
         const container = target ? ['\\\\.', target.reader, name].join('\\') : name;
-        let filterApplied = false;
         let csr;
         let containerId = '';
 
         try {
-            if (target?.reader.includes('\\')) {
-                throw new Error(
-                    'Имя считывателя содержит разделитель полного имени контейнера.',
-                );
-            }
-
             yield about.MediaFilter(plugin.MEDIA_TYPE_SCARD);
 
             if (target) {
@@ -181,7 +180,6 @@ export function cryptoProAdapter(plugin, report) {
                     operations,
                     regex,
                 });
-                filterApplied = true;
                 yield about.ReaderFilter(type, operations, regex);
             } else {
                 yield about.ReaderFilter(
@@ -214,18 +212,20 @@ export function cryptoProAdapter(plugin, report) {
             csr = request.csr;
             containerId = request.containerId;
         } finally {
-            // Узкий фильтр живёт только на время этой генерации.
-            if (filterApplied) {
-                try {
-                    yield about.MediaFilter(MEDIA_TYPE_DEFAULT);
-                    yield about.ReaderFilter(
-                        ENABLE_ANY_CARRIER_TYPE,
-                        ENABLE_ANY_OPERATION,
-                        '.*',
-                    );
-                } catch {
-                    // Сброс best-effort: исходный результат не подменяем.
-                }
+            // Вернуть все режимы до поиска считывателя для следующей генерации.
+            try {
+                yield about.MediaFilter(MEDIA_TYPE_DEFAULT);
+            } catch (error) {
+                report('Сбой сброса MediaFilter', error?.message || String(error));
+            }
+            try {
+                yield about.ReaderFilter(
+                    ENABLE_ANY_CARRIER_TYPE,
+                    ENABLE_ANY_OPERATION,
+                    '.*',
+                );
+            } catch (error) {
+                report('Сбой сброса ReaderFilter', error?.message || String(error));
             }
         }
 

@@ -172,18 +172,31 @@ test('Если итоговый контейнер не идентифициру
     assert.deepEqual(ids('delete'), [['delete', second.containerId]]);
 });
 
-for (const [index, options] of [
-    { readers: [pkcs11Mode, otherMode] },
-    { readers: [pkcs11Mode, cspMode, { ...cspMode, reader: 'A second CSP' }] },
-    { readersError: new Error('GetReaderModes failed') },
-].entries()) {
+test('Одинаковые записи CSP-считывателя считаются одним вариантом', async () => {
+    const { run } = scenario({
+        first: firstPkcs11(),
+        api: KeyFormat.Csp,
+        readers: [pkcs11Mode, cspMode, { ...cspMode }, otherMode],
+    });
+
+    assert.deepEqual(await run(), { certificateRequest: 'second-csr' });
+});
+
+for (const [options, errorPattern] of [
+    [{ readers: [pkcs11Mode, otherMode] }, /считыватель CSP не найден/],
+    [
+        { readers: [pkcs11Mode, cspMode, { ...cspMode, reader: 'A second CSP' }] },
+        /считыватель CSP определён неоднозначно/,
+    ],
+    [{ readersError: new Error('GetReaderModes failed') }, /GetReaderModes failed/],
+]) {
     test(
-        'Если подготовка второй генерации не удалась, то ошибка пробрасывается (' + index + ')',
+        'Если подготовка второй генерации не удалась, то ошибка пробрасывается: ' + errorPattern.source,
         async () => {
             const first = firstPkcs11();
             const { run, ids, logged } = scenario({ first, api: KeyFormat.Csp, ...options });
 
-            await assert.rejects(run, /считыватель CSP|GetReaderModes failed/);
+            await assert.rejects(run, errorPattern);
             assert.equal(ids('create').length, 1);
             assert.equal(ids('delete').length, 0);
             assert.ok(logged.includes('createRequestWithKeyFormat:findTargetReader'));

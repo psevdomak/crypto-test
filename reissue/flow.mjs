@@ -4,7 +4,7 @@ import {
     identifyToken,
     isSameToken,
     tokenMedia,
-} from './token-identity.mjs';
+} from './token-identity.mjs?v=21';
 
 /**
  * Интерфейс зависимостей совпадает с KeyFormatFlow
@@ -83,12 +83,15 @@ async function resolveKeyFormat(flow, token) {
 async function createSecondRequest(flow, name, firstId, token, keyFormat) {
     const params = {...tokenParams(token), keyFormat};
     let target;
+    let readerModes;
     try {
-        target = findTargetReader(await flow.readReaders(), token, keyFormat);
+        readerModes = await flow.readReaders();
+        target = findTargetReader(readerModes, token, keyFormat);
     } catch (error) {
         flow.logError('createRequestWithKeyFormat:findTargetReader', error, {
             ...params,
             containerId: firstId,
+            readerModes,
         });
         throw error;
     }

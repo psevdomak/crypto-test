@@ -1,5 +1,5 @@
-import { createRequestWithKeyFormat } from './flow.mjs?v=20';
-import { cryptoProAdapter } from './cryptopro.mjs?v=20';
+import { createRequestWithKeyFormat } from './flow.mjs?v=21';
+import { cryptoProAdapter } from './cryptopro.mjs?v=21';
 
 const SUBJECT = 'CN=CryptoPro reissue test';
 const element = (id) => document.getElementById(id);
