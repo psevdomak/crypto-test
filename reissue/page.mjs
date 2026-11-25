@@ -1,4 +1,4 @@
-import { createRequestWithKeyFormat } from './flow.mjs?v=21';
+import { createRequestWithKeyFormat } from './flow.mjs?v=22';
 import { cryptoProAdapter } from './cryptopro.mjs?v=21';
 
 const SUBJECT = 'CN=CryptoPro reissue test';
@@ -62,7 +62,7 @@ form.addEventListener('submit', (event) => {
         const name = 'reissue-' + crypto.randomUUID();
         report('Запуск прогона', { name, mockFormat: mock });
 
-        const payload = await createRequestWithKeyFormat(
+        const { payload, regenerated } = await createRequestWithKeyFormat(
             {
                 createRequest: (requestName, target) =>
                     adapter.generate(requestName, SUBJECT, target),
@@ -79,7 +79,6 @@ form.addEventListener('submit', (event) => {
             name,
         );
 
-        const regenerated = payload.certificateRequestMetaInfo.containerName === name + '-final';
         const outcome = regenerated
             ? 'Итоговый CSR создан, первоначальный контейнер удалён.'
             : 'Сохранён первый CSR.';

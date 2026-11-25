@@ -81,7 +81,7 @@ for (const [format, make] of [
             const first = make();
             const { run, calls, ids } = scenario({ first, api: format });
 
-            assert.strictEqual(await run(), first.payload);
+            assert.deepEqual(await run(), { payload: first.payload, regenerated: false });
             assert.ok(calls.some(([action, serial]) => action === 'api' && serial === SERIAL));
             assert.equal(ids('create').length, 1);
             assert.equal(ids('delete').length, 0);
@@ -99,8 +99,14 @@ for (const [format, make] of [
             const first = make();
             const { run, ids } = scenario({ first, api: format });
 
-            assert.deepEqual(await run(), { certificateRequest: 'second-csr' });
-            assert.deepEqual(ids('create')[1], ['create', 'reissue-final', format]);
+            assert.deepEqual(await run(), {
+                payload: { certificateRequest: 'second-csr' },
+                regenerated: true,
+            });
+            assert.deepEqual(ids('create'), [
+                ['create', 'reissue', ''],
+                ['create', 'reissue', format],
+            ]);
             assert.deepEqual(ids('delete'), [['delete', first.containerId]]);
         },
     );
@@ -111,7 +117,7 @@ for (const api of ['error', 'unknown']) {
         const first = firstPkcs11();
         const { run, ids, logged } = scenario({ first, api });
 
-        assert.strictEqual(await run(), first.payload);
+        assert.deepEqual(await run(), { payload: first.payload, regenerated: false });
         assert.equal(ids('create').length, 1);
         assert.equal(ids('delete').length, 0);
         assert.deepEqual(
@@ -132,7 +138,7 @@ for (const [index, first] of [
     test('Если носитель не Рутокен, то API не вызывается (' + index + ')', async () => {
         const { run, ids } = scenario({ first, api: KeyFormat.Pkcs11 });
 
-        assert.strictEqual(await run(), first.payload);
+        assert.deepEqual(await run(), { payload: first.payload, regenerated: false });
         assert.equal(ids('api').length, 0);
     });
 }
@@ -179,7 +185,10 @@ test('Одинаковые записи CSP-считывателя считаю�
         readers: [pkcs11Mode, cspMode, { ...cspMode }, otherMode],
     });
 
-    assert.deepEqual(await run(), { certificateRequest: 'second-csr' });
+    assert.deepEqual(await run(), {
+        payload: { certificateRequest: 'second-csr' },
+        regenerated: true,
+    });
 });
 
 for (const [options, errorPattern] of [

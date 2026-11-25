@@ -173,7 +173,7 @@ export async function createRequestWithKeyFormat(flow, name) {
         {reader: first.reader, media: tokenMedia(first.containerId)},
     );
 
-    if (!token) return first.payload;
+    if (!token) return {payload: first.payload, regenerated: false};
 
     const keyFormat = await withCleanupOnError(
         flow,
@@ -183,7 +183,9 @@ export async function createRequestWithKeyFormat(flow, name) {
         tokenParams(token),
     );
 
-    if (!keyFormat || keyFormat === token.keyFormat) return first.payload;
+    if (!keyFormat || keyFormat === token.keyFormat) {
+        return {payload: first.payload, regenerated: false};
+    }
 
     flow.logError(
         'createRequestWithKeyFormat:secondContainer',
@@ -196,7 +198,7 @@ export async function createRequestWithKeyFormat(flow, name) {
 
     const second = await createSecondRequest(
         flow,
-        name + '-final',
+        name,
         first.containerId,
         token,
         keyFormat,
@@ -219,5 +221,5 @@ export async function createRequestWithKeyFormat(flow, name) {
         );
     }
 
-    return second.payload;
+    return {payload: second.payload, regenerated: true};
 }
