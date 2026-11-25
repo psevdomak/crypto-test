@@ -140,7 +140,11 @@ export function cryptoProAdapter(plugin, report) {
         // Закрытый ключ создаётся здесь, поэтому имя контейнера читаем после запроса.
         let containerId = '';
         try {
-            containerId = yield key.UniqueContainerName;
+            const uniqueName = yield key.UniqueContainerName;
+
+            // null/undefined от КриптоПро приводим к пустому имени:
+            // его обработают дальше (метаинфо, проверка итогового id).
+            containerId = typeof uniqueName === 'string' ? uniqueName : '';
         } catch (error) {
             report('createCertificateRequestOnToken:uniqueContainerName', error?.message || String(error), {
                 containerName,
