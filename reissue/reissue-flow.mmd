@@ -47,7 +47,6 @@ flowchart TD
     RESULT -->|Считыватель не найден однозначно или сбой генерации| KEEP
     RESULT -->|Пользователь отменил| DROP1
     RESULT -->|Успех| CLEAN
-    RESULT -->|Ошибка проверки контейнера| FAIL
     CLEAN -->|Удалён| DONE
     CLEAN -->|Ошибка удаления| FAIL
 
