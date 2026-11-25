@@ -241,6 +241,9 @@ test('Если вторая генерация упала, то возвраща
 for (const [index, createError] of [
     new Error('Отмена пользователем (0x8010006E)'),
     Object.assign(new Error('Canceled'), { code: '0x8010006E' }),
+    Object.assign(new Error('Canceled'), { number: -2146434962 }),
+    Object.assign(new Error('Canceled'), { number: 0x8010006e }),
+    Object.assign(new Error('Canceled'), { code: '-2146434962' }),
 ].entries()) {
     test(
         'Если пользователь отменил вторую генерацию, то первый контейнер удаляется, исходная ошибка пробрасывается (' + index + ')',
@@ -253,6 +256,32 @@ for (const [index, createError] of [
             assert.ok(logged.includes('createRequestWithKeyFormat:createSecond'));
         },
     );
+}
+
+test('Если ошибка с другим HRESULT, то это не отмена: возвращается CSR первого контейнера', async () => {
+    const first = firstPkcs11();
+    const { run, ids } = scenario({
+        first,
+        api: KeyFormat.Csp,
+        createError: Object.assign(new Error('No readers'), { number: -2146435026 }),
+    });
+
+    assert.deepEqual(await run(), { payload: first.payload, regenerated: false });
+    assert.equal(ids('delete').length, 0);
+});
+
+for (const containerId of [undefined, null]) {
+    test('Если id итогового контейнера не строка (' + containerId + '), то первый сохраняется, в лог пишется причина', async () => {
+        const { run, ids, logged } = scenario({
+            first: firstPkcs11(),
+            api: KeyFormat.Csp,
+            second: { ...container(CSP_MEDIA, 'second-csr', 'A CSP'), containerId },
+        });
+
+        await assert.rejects(run, /не вернул уникальное имя/);
+        assert.equal(ids('delete').length, 0);
+        assert.ok(logged.includes('createRequestWithKeyFormat:emptySecondId'));
+    });
 }
 
 test('Если после отмены не удалось удалить первый контейнер, то отмена не подменяется, сбой логируется', async () => {

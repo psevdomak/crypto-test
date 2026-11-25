@@ -1,4 +1,4 @@
-import { createRequestWithKeyFormat } from './flow.mjs?v=23';
+import { createRequestWithKeyFormat } from './flow.mjs?v=24';
 import { cryptoProAdapter } from './cryptopro.mjs?v=21';
 
 const SUBJECT = 'CN=CryptoPro reissue test';

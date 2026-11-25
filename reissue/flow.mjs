@@ -79,14 +79,30 @@ async function resolveKeyFormat(flow, token) {
     }
 }
 
-/** Пользователь отменил действие в окне КриптоПро: код в `code` либо в тексте ошибки. */
+/** HRESULT приходит знаковым числом (`-2146434962`) — приводим к беззнаковому. */
+const toUnsigned = (value) => (value < 0 ? value + 0x100000000 : value);
+const CANCELED = '0x8010006E';
+
+/**
+ * Пользователь отменил действие в окне КриптоПро. Код встречается в `code`,
+ * в `number` (знаковый HRESULT) и в тексте ошибки (`... (0x8010006E)`).
+ */
 function isCanceledByUser(error) {
-    const {code, message} = error ?? {};
-    const canceled = '0x8010006e';
+    const {code, number, message} = error ?? {};
+    const canceledNumber = Number(CANCELED);
 
     return (
-        String(code ?? '').toLowerCase() === canceled ||
-        String(message ?? '').toLowerCase().includes(canceled)
+        String(message ?? '').toLowerCase().includes(CANCELED.toLowerCase()) ||
+        [code, number].some((value) => {
+            const parsed = Number(value);
+
+            return (
+                value !== null &&
+                value !== '' &&
+                Number.isFinite(parsed) &&
+                toUnsigned(parsed) === canceledNumber
+            );
+        })
     );
 }
 
@@ -126,7 +142,7 @@ async function createSecondRequest(flow, name, firstId, token, keyFormat) {
 /** Итоговый контейнер должен быть на том же токене и в нужном формате; иначе он удаляется. */
 async function verifySecondRequest(flow, first, second, token, keyFormat) {
     // Без уникального имени формат итогового контейнера не подтвердить, а удалить его нельзя.
-    if (!second.containerId.trim()) {
+    if (!second.containerId?.trim()) {
         flow.logError(
             'createRequestWithKeyFormat:emptySecondId',
             'КриптоПро не вернул уникальное имя итогового контейнера',
