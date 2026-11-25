@@ -4,7 +4,7 @@ import {
     identifyToken,
     isSameToken,
     tokenMedia,
-} from './token-identity.mjs';
+} from './token-identity.mjs?v=26';
 
 /**
  * Интерфейс зависимостей совпадает с KeyFormatFlow

@@ -57,9 +57,9 @@ function scenario({ first, api, second, readers, readersError, createError, dele
 
             return api;
         },
-        logError(method, _error, params) {
+        logError(method, error, params) {
             logged.push(method);
-            loggedParams.push({ method, ...params });
+            loggedParams.push({ method, error: error?.message ?? String(error), ...params });
         },
     };
 
@@ -195,36 +195,32 @@ test('Одинаковые записи CSP-считывателя считаю�
     });
 });
 
-for (const [index, options] of [
-    { readers: [pkcs11Mode, otherMode] },
-    { readers: [pkcs11Mode, cspMode, { ...cspMode, reader: 'A second CSP' }] },
-    { readersError: new Error('GetReaderModes failed') },
-].entries()) {
+for (const { options, reason } of [
+    { options: { readers: [pkcs11Mode, otherMode] }, reason: 'считыватель не найден' },
+    {
+        options: { readers: [pkcs11Mode, cspMode, { ...cspMode, reader: 'A second CSP' }] },
+        reason: 'найдено несколько считывателей (2)',
+    },
+    { options: { readersError: new Error('GetReaderModes failed') }, reason: 'GetReaderModes failed' },
+]) {
     test(
-        'Если подготовка второй генерации не удалась, то возвращается CSR первого контейнера (' + index + ')',
+        'Если подготовка второй генерации не удалась, причина логируется и возвращается первый CSR: ' + reason,
         async () => {
             const first = firstPkcs11();
-            const { run, ids } = scenario({ first, api: KeyFormat.Csp, ...options });
+            const { run, ids, loggedParams } = scenario({ first, api: KeyFormat.Csp, ...options });
 
             assert.deepEqual(await run(), { payload: first.payload, regenerated: false });
             assert.equal(ids('create').length, 1);
             assert.equal(ids('delete').length, 0);
+            const entry = loggedParams.find(
+                ({ method }) => method === 'createRequestWithKeyFormat:createSecond',
+            );
+            assert.ok(entry.error.includes(reason));
+            assert.equal(entry.serialNumber, SERIAL);
+            assert.deepEqual(entry.readerModes, options.readers);
         },
     );
 }
-
-test('Если считыватель нужного формата не найден, то в лог уходит список режимов считывателей', async () => {
-    const readers = [pkcs11Mode, otherMode];
-    const first = firstPkcs11();
-    const { run, loggedParams } = scenario({ first, api: KeyFormat.Csp, readers });
-
-    assert.deepEqual(await run(), { payload: first.payload, regenerated: false });
-    const entry = loggedParams.find(
-        ({ method }) => method === 'createRequestWithKeyFormat:createSecond',
-    );
-    assert.equal(entry.serialNumber, SERIAL);
-    assert.deepEqual(entry.readerModes, readers);
-});
 
 test('Если вторая генерация упала, то возвращается CSR первого контейнера, ошибка логируется', async () => {
     const first = firstPkcs11();

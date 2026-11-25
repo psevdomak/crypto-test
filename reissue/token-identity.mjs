@@ -105,15 +105,12 @@ export function findTargetReader(readers, token, keyFormat) {
         }
     }
 
-    if (targets.length !== 1) {
-        throw new Error(
-            'Для Рутокена ' +
-                token.serialNumber +
-                ' считыватель ' +
-                keyFormat +
-                (targets.length === 0 ? ' не найден.' : ' определён неоднозначно.'),
-        );
-    }
+    if (targets.length === 1) return targets[0];
 
-    return targets[0];
+    const detail = 'Для Рутокена ' + token.serialNumber + ' в режиме ' + keyFormat;
+    throw new Error(
+        targets.length === 0
+            ? detail + ' считыватель не найден.'
+            : detail + ' найдено несколько считывателей (' + targets.length + ').',
+    );
 }
