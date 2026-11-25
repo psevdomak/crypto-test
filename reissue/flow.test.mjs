@@ -40,6 +40,7 @@ function scenario({ first, api, second, readers, readersError, createError, dele
             );
         },
         async readReaders() {
+            calls.push(['readReaders']);
             if (readersError) throw readersError;
 
             return readers ?? [cspMode, pkcs11Mode, otherMode];
@@ -332,19 +333,21 @@ for (const [index, second] of [
     );
 }
 
-test('Если итоговый контейнер имеет тот же id, что первый, то ничего не удаляется', async () => {
-    const first = firstPkcs11();
-    const { run, ids } = scenario({
+test('При совпадении id контейнер сохраняется, повторная сверка считывателя пропускается', async () => {
+    const first = { ...firstPkcs11(), containerId: 'opaque-id', reader: pkcs11Mode.reader };
+    const { run, ids, logged } = scenario({
         first,
         api: KeyFormat.Csp,
         second: {
-            ...container(CSP_MEDIA, 'second-csr'),
+            ...container(CSP_MEDIA, 'second-csr', cspMode.reader),
             containerId: first.containerId,
         },
     });
 
-    await assert.rejects(run);
+    await assert.rejects(run, /КриптоПро вернул тот же контейнер/);
+    assert.equal(ids('readReaders').length, 2);
     assert.equal(ids('delete').length, 0);
+    assert.ok(logged.includes('createRequestWithKeyFormat:verifySecond'));
 });
 
 test('Если у итогового контейнера нет id, первый сохраняется и CSR не возвращается', async () => {

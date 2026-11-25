@@ -141,60 +141,47 @@ async function createSecondRequest(flow, name, firstId, token, keyFormat) {
 
 /** Итоговый контейнер должен быть на том же токене и в нужном формате; иначе он удаляется. */
 async function verifySecondRequest(flow, first, second, token, keyFormat) {
-    // Без уникального имени формат итогового контейнера не подтвердить, а удалить его нельзя.
-    if (!second.containerId?.trim()) {
+    const firstId = first.containerId;
+    const {containerId: secondId, reader} = second;
+    const params = {...tokenParams(token), keyFormat, firstId, secondId};
+
+    if (!secondId?.trim()) {
+        const reason = 'КриптоПро не вернул уникальное имя итогового контейнера.';
         flow.logError(
             'createRequestWithKeyFormat:emptySecondId',
-            'КриптоПро не вернул уникальное имя итогового контейнера',
-            {...tokenParams(token), keyFormat, firstId: first.containerId},
+            reason,
+            params,
         );
 
-        throw new Error(
-            'КриптоПро не вернул уникальное имя итогового контейнера. Формат не подтверждён.',
-        );
+        throw new Error(reason + ' Формат не подтверждён.');
     }
 
-    const isSameContainer = second.containerId === first.containerId;
-    const identify = () =>
-        identifyToken(tokenMedia(second.containerId), second.reader, flow.readReaders);
-    // Тот же контейнер удалять нельзя: он остался бы единственным.
-    const secondToken = isSameContainer
-        ? await identify()
-        : await withCleanupOnError(
-              flow,
-              second.containerId,
-              'createRequestWithKeyFormat:identifySecond',
-              identify,
-              {...tokenParams(token), keyFormat, reader: second.reader},
-          );
+    if (secondId === firstId) {
+        const reason = 'КриптоПро вернул тот же контейнер при второй генерации.';
+        flow.logError('createRequestWithKeyFormat:verifySecond', reason, params);
+        throw new Error(reason);
+    }
 
-    if (
-        !isSameContainer &&
-        isSameToken(secondToken, token) &&
-        secondToken?.keyFormat === keyFormat
-    ) {
+    const secondToken = await withCleanupOnError(
+        flow,
+        secondId,
+        'createRequestWithKeyFormat:identifySecond',
+        () => identifyToken(tokenMedia(secondId), reader, flow.readReaders),
+        {...params, reader},
+    );
+    if (isSameToken(secondToken, token) && secondToken.keyFormat === keyFormat) {
         return;
     }
 
-    flow.logError(
-        'createRequestWithKeyFormat:verifySecond',
-        isSameContainer
-            ? 'Вторая генерация вернула тот же контейнер, формат не изменён'
-            : 'Итоговый контейнер создан на другом токене или в другом формате',
-        {
-            ...tokenParams(token),
-            keyFormat,
-            firstId: first.containerId,
-            secondId: second.containerId,
-            secondSerial: secondToken?.serialNumber,
-            secondFamily: secondToken?.family,
-            secondFormat: secondToken?.keyFormat,
-        },
-    );
-
-    if (!isSameContainer) await deleteQuietly(flow, second.containerId);
-
-    throw new Error('Итоговый контейнер создан на другом токене или в другом формате.');
+    const reason = 'Итоговый контейнер создан на другом токене или в другом формате.';
+    flow.logError('createRequestWithKeyFormat:verifySecond', reason, {
+        ...params,
+        secondSerial: secondToken?.serialNumber,
+        secondFamily: secondToken?.family,
+        secondFormat: secondToken?.keyFormat,
+    });
+    await deleteQuietly(flow, secondId);
+    throw new Error(reason);
 }
 
 /**
