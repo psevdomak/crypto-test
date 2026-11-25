@@ -26,10 +26,9 @@ flowchart TD
     TOKEN{"Какой носитель и формат<br/>у первого контейнера?"}
     API["Запросить формат у key-format<br/>по серийному номеру Рутокена"]
     FORMAT{"Какой формат вернул API?"}
-    SECOND["Найти нужный режим того же Рутокена<br/>и создать второй контейнер с тем же именем"]
-    RESULT{"Результат второй генерации"}
-    CHECK{"Второй контейнер создан<br/>на том же Рутокене<br/>в нужном формате?"}
-    CLEAN["Удалить первый контейнер по его ID"]
+    SECOND["Создать и проверить второй контейнер<br/>на том же Рутокене в нужном формате"]
+    RESULT{"Итог второй генерации"}
+    CLEAN["Удалить первый контейнер"]
     KEEP([Вернуть первый CSR])
     DONE([Вернуть второй CSR])
     FAIL([Завершить прогон с ошибкой])
@@ -47,11 +46,8 @@ flowchart TD
     SECOND --> RESULT
     RESULT -->|Считыватель не найден однозначно или сбой генерации| KEEP
     RESULT -->|Пользователь отменил| DROP1
-    RESULT -->|Контейнер создан| CHECK
-
-    CHECK -->|Да| CLEAN
-    CHECK -->|Отдельный контейнер не подтверждён| FAIL
-    CHECK -->|Контейнер найден, но токен или формат не подтверждён| DROP2["Попытаться удалить второй контейнер"] --> FAIL
+    RESULT -->|Успех| CLEAN
+    RESULT -->|Ошибка проверки контейнера| FAIL
     CLEAN -->|Удалён| DONE
     CLEAN -->|Ошибка удаления| FAIL
 
@@ -59,7 +55,7 @@ flowchart TD
     classDef success fill:#e8f5ec,stroke:#52785d,color:#1c4328
     classDef fallback fill:#fff4db,stroke:#97713a,color:#593d10
     classDef failure fill:#fceced,stroke:#ab6c72,color:#6f3136
-    class TOKEN,FORMAT,RESULT,CHECK choice
+    class TOKEN,FORMAT,RESULT choice
     class DONE success
     class KEEP fallback
     class FAIL failure
