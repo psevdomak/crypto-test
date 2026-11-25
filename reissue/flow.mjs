@@ -3,15 +3,17 @@ import {
     findTargetReader,
     identifyToken,
     isSameToken,
+    rutokenIdentity,
     tokenMedia,
 } from './token-identity.mjs?v=26';
 
 /**
- * Интерфейс зависимостей совпадает с KeyFormatFlow
+ * Базовый интерфейс зависимостей соответствует KeyFormatFlow
  * из sme-qds-ui (`libs/common/crypto/src/lib/cadescom/key-format-flow.ts`).
  *
  * createRequest(name, target?) отвечает `{payload, containerId, reader}`;
  * `target` — считыватель выбранного токена и режим ключа.
+ * readSmartCardReaders() перечисляет режимы смарт-карт до генерации.
  */
 
 const isSupportedFormat = (value) =>
@@ -46,10 +48,10 @@ async function withCleanupOnError(flow, containerId, method, action, params) {
 }
 
 /**
- * Формат, в котором нужно создавать итоговый ключ. `undefined` — остаётся первый
- * контейнер (API недоступен, вернул ошибку или неизвестный формат).
+ * Формат итогового ключа. `undefined` — используем обычный режим генерации
+ * или сохраняем первый контейнер, если он уже создан.
  */
-async function resolveKeyFormat(flow, token) {
+async function resolveKeyFormat(flow, token, useOriginalFormat = false) {
     if (!isSupportedFormat(token.keyFormat)) {
         throw new Error(
             'КриптоПро создал контейнер в режиме ' +
@@ -57,6 +59,7 @@ async function resolveKeyFormat(flow, token) {
                 '. Для перевыпуска подходят CSP и PKCS11.',
         );
     }
+    if (useOriginalFormat) return undefined;
 
     try {
         const keyFormat = await flow.requestKeyFormat(token.serialNumber);
@@ -76,6 +79,38 @@ async function resolveKeyFormat(flow, token) {
         flow.logError('requestKeyFormat', error, tokenParams(token));
 
         return undefined;
+    }
+}
+
+async function prepareDirectRequest(flow) {
+    let readerModes;
+    try {
+        readerModes = await flow.readSmartCardReaders();
+    } catch (error) {
+        flow.logError('createRequestWithKeyFormat:readSmartCardReaders', error);
+        return undefined;
+    }
+
+    // Пустые слоты и программные носители не участвуют в выборе смарт-карты.
+    const tokens = readerModes
+        .filter(({media}) => !['NO_MEDIA', 'HDIMAGE', 'REGISTRY'].includes(media))
+        .map(({media}) => rutokenIdentity(media));
+    const token = tokens.find((entry) => isSupportedFormat(entry?.keyFormat));
+    if (!token || !tokens.every((entry) => isSameToken(entry, token))) return undefined;
+
+    const keyFormat = await resolveKeyFormat(flow, token);
+    if (!keyFormat) return {token};
+
+    try {
+        const target = findTargetReader(readerModes, token, keyFormat);
+        return {token, keyFormat, target};
+    } catch (error) {
+        flow.logError('createRequestWithKeyFormat:prepareDirect', error, {
+            ...tokenParams(token),
+            keyFormat,
+            readerModes,
+        });
+        return {token};
     }
 }
 
@@ -140,15 +175,15 @@ async function createSecondRequest(flow, name, firstId, token, keyFormat) {
 }
 
 /** Итоговый контейнер должен быть на том же токене и в нужном формате; иначе он удаляется. */
-async function verifySecondRequest(flow, first, second, token, keyFormat) {
-    const firstId = first.containerId;
-    const {containerId: secondId, reader} = second;
-    const params = {...tokenParams(token), keyFormat, firstId, secondId};
+async function verifyFinalRequest(flow, finalRequest, token, keyFormat, firstId) {
+    const {containerId: finalId, reader} = finalRequest;
+    const stage = firstId === undefined ? 'Direct' : 'Second';
+    const params = {...tokenParams(token), keyFormat, firstId, secondId: finalId};
 
-    if (!secondId?.trim()) {
+    if (!finalId?.trim()) {
         const reason = 'КриптоПро не вернул уникальное имя итогового контейнера.';
         flow.logError(
-            'createRequestWithKeyFormat:emptySecondId',
+            'createRequestWithKeyFormat:empty' + stage + 'Id',
             reason,
             params,
         );
@@ -156,7 +191,7 @@ async function verifySecondRequest(flow, first, second, token, keyFormat) {
         throw new Error(reason + ' Формат не подтверждён.');
     }
 
-    if (secondId === firstId) {
+    if (finalId === firstId) {
         const reason = 'КриптоПро вернул тот же контейнер при второй генерации.';
         flow.logError('createRequestWithKeyFormat:verifySecond', reason, params);
         throw new Error(reason);
@@ -164,9 +199,9 @@ async function verifySecondRequest(flow, first, second, token, keyFormat) {
 
     const secondToken = await withCleanupOnError(
         flow,
-        secondId,
-        'createRequestWithKeyFormat:identifySecond',
-        () => identifyToken(tokenMedia(secondId), reader, flow.readReaders),
+        finalId,
+        'createRequestWithKeyFormat:identify' + stage,
+        () => identifyToken(tokenMedia(finalId), reader, flow.readReaders),
         {...params, reader},
     );
     if (isSameToken(secondToken, token) && secondToken.keyFormat === keyFormat) {
@@ -174,26 +209,34 @@ async function verifySecondRequest(flow, first, second, token, keyFormat) {
     }
 
     const reason = 'Итоговый контейнер создан на другом токене или в другом формате.';
-    flow.logError('createRequestWithKeyFormat:verifySecond', reason, {
+    flow.logError('createRequestWithKeyFormat:verify' + stage, reason, {
         ...params,
         secondSerial: secondToken?.serialNumber,
         secondFamily: secondToken?.family,
         secondFormat: secondToken?.keyFormat,
     });
-    await deleteQuietly(flow, secondId);
+    await deleteQuietly(flow, finalId);
     throw new Error(reason);
 }
 
 /**
  * Перевыпуск с определением формата ключа по серийному номеру токена.
  *
- * 1. Первая генерация — как раньше.
+ * 1. Для единственного заранее определённого Рутокена возможна прямая генерация.
  * 2. Не Рутокен, ошибка API, неизвестный или тот же формат — остаётся первый CSR.
  * 3. Иной формат — второй контейнер на том же токене, затем удаляется первый.
  * 4. Второй контейнер создать не удалось — тоже остаётся первый CSR, ошибка в лог.
  *    Исключение — отмена пользователем: первый контейнер удаляется, ошибка пробрасывается.
  */
 export async function createRequestWithKeyFormat(flow, name) {
+    const direct = await prepareDirectRequest(flow);
+    if (direct?.target) {
+        const {token, keyFormat, target} = direct;
+        const finalRequest = await flow.createRequest(name, {keyFormat, ...target});
+        await verifyFinalRequest(flow, finalRequest, token, keyFormat);
+        return {payload: finalRequest.payload, regenerated: false, direct: true};
+    }
+
     const first = await flow.createRequest(name);
     // Ошибка идентификации или непригодный режим: контейнер уже создан — убираем его.
     const token = await withCleanupOnError(
@@ -210,7 +253,7 @@ export async function createRequestWithKeyFormat(flow, name) {
         flow,
         first.containerId,
         'createRequestWithKeyFormat:resolveKeyFormat',
-        () => resolveKeyFormat(flow, token),
+        () => resolveKeyFormat(flow, token, Boolean(direct && isSameToken(token, direct.token))),
         tokenParams(token),
     );
 
@@ -238,7 +281,7 @@ export async function createRequestWithKeyFormat(flow, name) {
     // Второй контейнер создать не удалось — в заявку идёт CSR первого.
     if (!second) return {payload: first.payload, regenerated: false};
 
-    await verifySecondRequest(flow, first, second, token, keyFormat);
+    await verifyFinalRequest(flow, second, token, keyFormat, first.containerId);
 
     try {
         await flow.deleteContainer(first.containerId);

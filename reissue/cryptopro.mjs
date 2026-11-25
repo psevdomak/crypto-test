@@ -61,6 +61,15 @@ export function cryptoProAdapter(plugin, report) {
         return entries;
     }
 
+    function* smartCardReaders(context) {
+        try {
+            yield context.about.MediaFilter(plugin.MEDIA_TYPE_SCARD);
+            return yield* readers(context);
+        } finally {
+            yield context.about.MediaFilter(MEDIA_TYPE_DEFAULT);
+        }
+    }
+
     function* containers({ info }) {
         const collection = yield info.EnumContainers();
         const count = yield collection.Count;
@@ -265,6 +274,7 @@ export function cryptoProAdapter(plugin, report) {
     return {
         versions: () => run(versions),
         readers: () => run(readers),
+        smartCardReaders: () => run(smartCardReaders),
         generate: (name, subject, target) =>
             run((context) => generate(context, name, subject, target)),
         remove: (containerId) => run((context) => remove(context, containerId)),

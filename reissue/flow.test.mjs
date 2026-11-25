@@ -18,7 +18,10 @@ const container = (media, csr, reader = 'reader', key = 'key') => ({
     reader,
 });
 
-function scenario({ first, api, second, readers, readersError, createError, deleteError }) {
+function scenario({
+    first, api, second, readers, readersError, createError, deleteError,
+    smartCardReaders = [], smartCardError,
+}) {
     const calls = [];
     const logged = [];
     const loggedParams = [];
@@ -44,6 +47,11 @@ function scenario({ first, api, second, readers, readersError, createError, dele
             if (readersError) throw readersError;
 
             return readers ?? [cspMode, pkcs11Mode, otherMode];
+        },
+        async readSmartCardReaders() {
+            calls.push(['readSmartCardReaders']);
+            if (smartCardError) throw smartCardError;
+            return smartCardReaders;
         },
         async deleteContainer(containerId) {
             calls.push(['delete', containerId]);
@@ -74,6 +82,87 @@ function scenario({ first, api, second, readers, readersError, createError, dele
 
 const firstCsp = () => container(CSP_MEDIA, 'first-csr');
 const firstPkcs11 = () => container(PKCS11_MEDIA, 'first-csr');
+
+test('Один Рутокен в нескольких режимах: API вызывается до единственной генерации', async () => {
+    const { run, calls } = scenario({
+        api: KeyFormat.Csp,
+        smartCardReaders: [
+            pkcs11Mode, cspMode, {...cspMode},
+            {reader: 'A FKS', media: 'rutoken_fkc_3a5a7554'},
+            {reader: 'Empty slot', media: 'NO_MEDIA'},
+            {reader: 'Directory', media: 'HDIMAGE'},
+        ],
+    });
+
+    assert.deepEqual(await run(), {
+        payload: {certificateRequest: 'second-csr'},
+        regenerated: false,
+        direct: true,
+    });
+    assert.deepEqual(calls, [
+        ['readSmartCardReaders'],
+        ['api', SERIAL],
+        ['create', 'reissue', KeyFormat.Csp],
+    ]);
+});
+
+for (const [api, modes] of [
+    ['error', [pkcs11Mode, cspMode]],
+    [KeyFormat.Csp, [pkcs11Mode]],
+    [KeyFormat.Csp, [pkcs11Mode, cspMode, {...cspMode, reader: 'A second CSP'}]],
+]) {
+    test('При недоступном API или режиме выполняется одна обычная генерация', async () => {
+        const first = firstPkcs11();
+        const { run, calls } = scenario({first, api, smartCardReaders: modes});
+
+        assert.deepEqual(await run(), {payload: first.payload, regenerated: false});
+        assert.deepEqual(calls, [
+            ['readSmartCardReaders'],
+            ['api', SERIAL],
+            ['create', 'reissue', ''],
+        ]);
+    });
+}
+
+for (const [description, options] of [
+    ['двух Рутокенах', {smartCardReaders: [pkcs11Mode, cspMode, otherMode]}],
+    ['другом носителе', {smartCardReaders: [pkcs11Mode, {reader: 'Other card', media: 'foreign_card'}]}],
+    ['неопределённом носителе', {smartCardReaders: [pkcs11Mode, {reader: 'Unknown card', media: 'NO_UNIQUE'}]}],
+    ['ошибке перечисления', {smartCardError: new Error('GetReaderModes failed')}],
+]) {
+    test('При ' + description + ' первая генерация предшествует запросу API', async () => {
+        const first = firstPkcs11();
+        const { run, calls } = scenario({first, api: KeyFormat.Pkcs11, ...options});
+
+        assert.deepEqual(await run(), {payload: first.payload, regenerated: false});
+        assert.deepEqual(calls, [
+            ['readSmartCardReaders'],
+            ['create', 'reissue', ''],
+            ['api', SERIAL],
+        ]);
+    });
+}
+
+test('Ошибка прямой генерации пробрасывается без повторной попытки', async () => {
+    const createError = new Error('CreateRequest failed');
+    const { run, ids } = scenario({
+        api: KeyFormat.Csp, smartCardReaders: [pkcs11Mode, cspMode], createError,
+    });
+
+    await assert.rejects(run, (error) => error === createError);
+    assert.deepEqual(ids('create'), [['create', 'reissue', KeyFormat.Csp]]);
+    assert.equal(ids('delete').length, 0);
+});
+
+test('При неверном формате прямой генерации удаляется созданный контейнер', async () => {
+    const second = container(PKCS11_MEDIA, 'wrong-mode-csr');
+    const { run, ids } = scenario({
+        api: KeyFormat.Csp, smartCardReaders: [pkcs11Mode, cspMode], second,
+    });
+
+    await assert.rejects(run, /на другом токене или в другом формате/);
+    assert.deepEqual(ids('delete'), [['delete', second.containerId]]);
+});
 
 for (const [format, make] of [
     [KeyFormat.Csp, firstCsp],

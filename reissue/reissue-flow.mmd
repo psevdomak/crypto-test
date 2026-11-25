@@ -22,6 +22,10 @@ flowchart TD
     accTitle: Динамическая генерация ключей
     accDescr: Выбор формата ключа по серийному номеру Рутокена, повторная генерация, фолбэк и очистка контейнеров.
     START([Пользователь нажимает «Сгенерировать»])
+    SINGLE{"Виден ровно один<br/>однозначно определённый Рутокен?"}
+    DIRECT["Запросить формат и создать один контейнер<br/>Если API или режим недоступны,<br/>генерировать по обычным правилам"]
+    DIRECTDONE([Вернуть итоговый CSR])
+    DIRECTFAIL([Завершить прогон с ошибкой])
     FIRST["КриптоПро создаёт первый контейнер и CSR"]
     TOKEN{"Какой носитель и формат<br/>у первого контейнера?"}
     API["Запросить формат у key-format<br/>по серийному номеру Рутокена"]
@@ -33,7 +37,11 @@ flowchart TD
     DONE([Вернуть второй CSR])
     FAIL([Завершить прогон с ошибкой])
 
-    START --> FIRST
+    START --> SINGLE
+    SINGLE -->|Да| DIRECT
+    SINGLE -->|Нет или ошибка перечисления| FIRST
+    DIRECT -->|Успех| DIRECTDONE
+    DIRECT -->|Ошибка или отмена| DIRECTFAIL
     FIRST -->|Успех| TOKEN
     FIRST -->|Ошибка или отмена| FAIL
     TOKEN -->|Другой носитель| KEEP
@@ -54,7 +62,7 @@ flowchart TD
     classDef success fill:#e8f5ec,stroke:#52785d,color:#1c4328
     classDef fallback fill:#fff4db,stroke:#97713a,color:#593d10
     classDef failure fill:#fceced,stroke:#ab6c72,color:#6f3136
-    class TOKEN,FORMAT,RESULT choice
-    class DONE success
+    class TOKEN,FORMAT,RESULT,SINGLE choice
+    class DONE,DIRECTDONE success
     class KEEP fallback
-    class FAIL failure
+    class FAIL,DIRECTFAIL failure
