@@ -1,0 +1,63 @@
+---
+config:
+  theme: base
+  htmlLabels: false
+  themeCSS: |
+    text { font-family: system-ui, sans-serif; }
+    .background { fill: #fff; }
+  themeVariables:
+    fontFamily: 'system-ui, sans-serif'
+    fontSize: '17px'
+    primaryColor: '#f3f6fa'
+    primaryTextColor: '#17273b'
+    primaryBorderColor: '#8c9db2'
+    lineColor: '#576e87'
+    edgeLabelBackground: '#ffffff'
+  flowchart:
+    curve: linear
+    nodeSpacing: 24
+    rankSpacing: 36
+---
+flowchart TD
+    accTitle: Динамическая генерация ключей
+    accDescr: Выбор формата ключа по серийному номеру Рутокена, повторная генерация, фолбэк и очистка контейнеров.
+    START([Пользователь нажимает «Сгенерировать»])
+    FIRST["КриптоПро создаёт первый контейнер и CSR"]
+    TOKEN{"Какой носитель и формат<br/>у первого контейнера?"}
+    API["Запросить формат у key-format<br/>по серийному номеру Рутокена"]
+    FORMAT{"Какой формат вернул API?"}
+    SECOND["Найти нужный режим того же Рутокена<br/>и создать второй контейнер с тем же именем"]
+    RESULT{"Создан второй контейнер?"}
+    CHECK{"У второго контейнера отдельный ID,<br/>тот же Рутокен и нужный формат?"}
+    CLEAN["Удалить первый контейнер по его ID"]
+    KEEP([Вернуть первый CSR])
+    DONE([Вернуть второй CSR])
+    FAIL([Завершить прогон с ошибкой])
+
+    START --> FIRST
+    FIRST -->|Успех| TOKEN
+    FIRST -->|Ошибка или отмена| FAIL
+    TOKEN -->|Другой носитель| KEEP
+    TOKEN -->|Рутокен в CSP или PKCS11| API
+    TOKEN -->|FKS или ошибка идентификации| DROP1["Попытаться удалить первый контейнер"] --> FAIL
+    API --> FORMAT
+    FORMAT -->|Текущий формат, ошибка API<br/>или неизвестный ответ| KEEP
+    FORMAT -->|Другой поддерживаемый формат| SECOND
+    SECOND --> RESULT
+    RESULT -->|Считыватель недоступен<br/>или сбой генерации| KEEP
+    RESULT -->|Пользователь отменил| DROP1
+    RESULT -->|Да| CHECK
+    CHECK -->|Да| CLEAN
+    CHECK -->|ID пустой или совпадает с первым| FAIL
+    CHECK -->|ID отдельный, токен или формат<br/>не подтверждён| DROP2["Попытаться удалить второй контейнер"] --> FAIL
+    CLEAN -->|Удалён| DONE
+    CLEAN -->|Ошибка удаления| FAIL
+
+    classDef choice fill:#e8effb,stroke:#6986b3,color:#182d51
+    classDef success fill:#e8f5ec,stroke:#52785d,color:#1c4328
+    classDef fallback fill:#fff4db,stroke:#97713a,color:#593d10
+    classDef failure fill:#fceced,stroke:#ab6c72,color:#6f3136
+    class TOKEN,FORMAT,RESULT,CHECK choice
+    class DONE success
+    class KEEP fallback
+    class FAIL failure
