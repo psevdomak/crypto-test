@@ -223,7 +223,7 @@ async function verifyFinalRequest(flow, finalRequest, token, keyFormat, firstId)
  * Перевыпуск с определением формата ключа по серийному номеру токена.
  *
  * 1. Для единственного заранее определённого Рутокена возможна прямая генерация.
- * 2. Не Рутокен, ошибка API, неизвестный или тот же формат — остаётся первый CSR.
+ * 2. Для CSP и других носителей сразу возвращаем первый CSR. Для PKCS11 проверяем формат через API.
  * 3. Иной формат — второй контейнер на том же токене, затем удаляется первый.
  * 4. Второй контейнер создать не удалось — тоже остаётся первый CSR, ошибка в лог.
  *    Исключение — отмена пользователем: первый контейнер удаляется, ошибка пробрасывается.
@@ -247,7 +247,9 @@ export async function createRequestWithKeyFormat(flow, name) {
         {reader: first.reader, media: tokenMedia(first.containerId)},
     );
 
-    if (!token) return {payload: first.payload, regenerated: false};
+    if (!token || token.keyFormat === KeyFormat.Csp) {
+        return {payload: first.payload, regenerated: false};
+    }
 
     const keyFormat = await withCleanupOnError(
         flow,

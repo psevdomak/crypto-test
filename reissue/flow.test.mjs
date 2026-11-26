@@ -164,46 +164,41 @@ test('При неверном формате прямой генерации у�
     assert.deepEqual(ids('delete'), [['delete', second.containerId]]);
 });
 
-for (const [format, make] of [
-    [KeyFormat.Csp, firstCsp],
-    [KeyFormat.Pkcs11, firstPkcs11],
-]) {
-    test(
-        'Если API подтвердил формат ' + format + ', то остаётся первый контейнер и его CSR',
-        async () => {
-            const first = make();
-            const { run, calls, ids } = scenario({ first, api: format });
+test('Для первого контейнера в CSP возвращается первый CSR без запроса API', async () => {
+    const first = firstCsp();
+    const { run, calls } = scenario({ first, api: KeyFormat.Pkcs11 });
 
-            assert.deepEqual(await run(), { payload: first.payload, regenerated: false });
-            assert.ok(calls.some(([action, serial]) => action === 'api' && serial === SERIAL));
-            assert.equal(ids('create').length, 1);
-            assert.equal(ids('delete').length, 0);
-        },
-    );
-}
+    assert.deepEqual(await run(), { payload: first.payload, regenerated: false });
+    assert.deepEqual(calls, [
+        ['readSmartCardReaders'],
+        ['create', 'reissue', ''],
+    ]);
+});
 
-for (const [format, make] of [
-    [KeyFormat.Csp, firstPkcs11],
-    [KeyFormat.Pkcs11, firstCsp],
-]) {
-    test(
-        'Если API вернул другой формат (' + format + '), то второй контейнер на том же токене, первый удаляется',
-        async () => {
-            const first = make();
-            const { run, ids } = scenario({ first, api: format });
+test('Если API подтвердил PKCS11, то остаётся первый контейнер и его CSR', async () => {
+    const first = firstPkcs11();
+    const { run, ids } = scenario({ first, api: KeyFormat.Pkcs11 });
 
-            assert.deepEqual(await run(), {
-                payload: { certificateRequest: 'second-csr' },
-                regenerated: true,
-            });
-            assert.deepEqual(ids('create'), [
-                ['create', 'reissue', ''],
-                ['create', 'reissue', format],
-            ]);
-            assert.deepEqual(ids('delete'), [['delete', first.containerId]]);
-        },
-    );
-}
+    assert.deepEqual(await run(), { payload: first.payload, regenerated: false });
+    assert.deepEqual(ids('api'), [['api', SERIAL]]);
+    assert.equal(ids('create').length, 1);
+    assert.equal(ids('delete').length, 0);
+});
+
+test('Если после первой генерации в PKCS11 API вернул CSP, то создаётся второй контейнер', async () => {
+    const first = firstPkcs11();
+    const { run, ids } = scenario({ first, api: KeyFormat.Csp });
+
+    assert.deepEqual(await run(), {
+        payload: { certificateRequest: 'second-csr' },
+        regenerated: true,
+    });
+    assert.deepEqual(ids('create'), [
+        ['create', 'reissue', ''],
+        ['create', 'reissue', KeyFormat.Csp],
+    ]);
+    assert.deepEqual(ids('delete'), [['delete', first.containerId]]);
+});
 
 for (const api of ['error', 'unknown']) {
     test('Если API ответил «' + api + '», то остаётся первый CSR', async () => {
